@@ -1,0 +1,12 @@
+[project]
+name = "teslawebscrape"
+version = "0.2.0"
+description = "Tesla inventory scraper — MCP server with nodriver + curl_cffi"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.0.0",
+    "nodriver>=0.38",
+    "curl_cffi>=0.7.0",
+    "asyncpg>=0.30.0",
+    "python-dotenv>=1.0.0",
+]
