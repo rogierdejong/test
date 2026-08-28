@@ -171,6 +171,8 @@ cookiestappen één voor één af met de melding welke stap faalt.
 |----------|--------------------|
 | `Access Denied` / `Toegang geweigerd` bij het ophalen van cookies | Akamai blokkeert; verhoog de `asyncio.sleep(10)` in `tesla_mcp/scraper.py` of probeer het later opnieuw |
 | API geeft 403 of 429 | Cookies verlopen — de server gooit ze zelf weg; roep `acquire_cookies` opnieuw aan en probeer één keer opnieuw |
+| `'str' object has no attribute 'get'` bij `condition="new"` | Opgelost: nieuwe voorraad komt in emmers (`exact`/`approximate`) in plaats van een platte lijst. Draai `git pull` |
+| Nieuwe auto's geven 0 resultaten, occasions wel | Kan kloppen — de NL-voorraad nieuwe auto's is regelmatig leeg. Controleer het op `tesla.com/nl_NL/inventory/new/my` |
 | Nul resultaten, terwijl de site ze wel toont | Controleer met `region_info()` of markt `NL` actief is en of de postcode klopt |
 | API geeft ineens 404 | Zet `TESLA_API_LOCALE_PREFIX=nl_NL` in `.env`; de aanroep gaat dan via `tesla.com/nl_NL/inventory/api/v4/...` |
 | `KeyError: 'sameParty'` of hangen bij het uitlezen van cookies | Te oude `nodriver`; vanaf 0.50.3 is dit opgelost. Draai `uv sync` na een `git pull` |

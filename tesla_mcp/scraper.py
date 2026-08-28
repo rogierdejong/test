@@ -35,6 +35,42 @@ async def _step(label: str, coro, timeout: float):
         ) from None
 
 
+# Buckets Tesla uses for new-inventory results, in the order it shows them.
+_RESULT_BUCKETS = ("exact", "approximate", "approximateOutside")
+
+
+def _normalize_response(data: dict) -> dict:
+    """Make "results" a flat list, whatever shape the API used.
+
+    Used inventory returns a plain list. New inventory returns a dict of
+    buckets instead — exact / approximate / approximateOutside — each holding
+    its own list. Callers iterating the raw value then walked over dict *keys*
+    (strings) and blew up on the first v.get(...).
+    """
+    results = data.get("results")
+
+    if isinstance(results, list):
+        return data
+    if results is None:
+        return {**data, "results": []}
+    if not isinstance(results, dict):
+        return {**data, "results": []}
+
+    flat: list[dict] = []
+    seen_buckets: set[str] = set()
+    for bucket in _RESULT_BUCKETS:
+        items = results.get(bucket)
+        seen_buckets.add(bucket)
+        if isinstance(items, list):
+            flat.extend(items)
+    # Tolerate bucket names Tesla adds later.
+    for bucket, items in results.items():
+        if bucket not in seen_buckets and isinstance(items, list):
+            flat.extend(items)
+
+    return {**data, "results": flat}
+
+
 # ── Cookie acquisition via nodriver ──────────────────────────────────
 
 
@@ -203,7 +239,7 @@ class InventoryClient:
 
         if resp.status_code != 200:
             raise RuntimeError(f"API returned {resp.status_code}: {resp.text[:300]}")
-        return resp.json()
+        return _normalize_response(resp.json())
 
     def fetch_all(
         self,

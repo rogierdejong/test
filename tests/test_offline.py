@@ -23,22 +23,25 @@ from tesla_mcp.config import REGIONS, get_region  # noqa: E402
 class _FakeResponse:
     status_code = 200
 
-    def __init__(self, url: str, headers: dict) -> None:
+    def __init__(self, url: str, headers: dict, body: dict | None = None) -> None:
         self.url = url
         self.headers = headers
+        self._body = body if body is not None else {"total_matches_found": 0, "results": []}
 
     def json(self) -> dict:
-        return {"total_matches_found": 0, "results": []}
+        return self._body
 
 
 class _FakeRequests:
     """Stand-in for curl_cffi.requests — records the call instead of sending it."""
 
     last: _FakeResponse | None = None
+    next_body: dict | None = None
 
     @classmethod
     def get(cls, url: str, impersonate: str = "", headers: dict | None = None, **_):
-        cls.last = _FakeResponse(url, headers or {})
+        cls.last = _FakeResponse(url, headers or {}, cls.next_body)
+        cls.next_body = None
         return cls.last
 
 
@@ -129,6 +132,35 @@ def test_nodriver_parses_cookies_without_sameparty() -> None:
         "expires": 1819449413.49, "sameSite": "None",
     })
     assert cookie.name == "_abck"
+
+
+def test_new_inventory_buckets_are_flattened() -> None:
+    """New inventory nests results in exact/approximate buckets, not a list.
+
+    Before this was handled, searching condition="new" iterated the dict's keys
+    and died with "'str' object has no attribute 'get'".
+    """
+    client = scraper.InventoryClient({"_abck": "x"}, region=get_region("NL"))
+    _FakeRequests.next_body = {
+        "total_matches_found": 3,
+        "results": {
+            "exact": [{"VIN": "A"}, {"VIN": "B"}],
+            "approximate": [{"VIN": "C"}],
+            "approximateOutside": [],
+        },
+    }
+    data = client.fetch_page(model="my", condition="new")
+
+    assert [v["VIN"] for v in data["results"]] == ["A", "B", "C"]
+    assert data["total_matches_found"] == 3
+
+
+def test_empty_new_inventory_is_not_an_error() -> None:
+    client = scraper.InventoryClient({"_abck": "x"}, region=get_region("NL"))
+    _FakeRequests.next_body = {"total_matches_found": 0, "results": {"exact": []}}
+
+    total, vehicles = client.fetch_top_n(model="my", condition="new", n=30)
+    assert (total, vehicles) == (0, [])
 
 
 def test_all_presets_are_coherent() -> None:
