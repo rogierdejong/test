@@ -12,23 +12,40 @@ cd "$PROJECT_DIR"
 
 if [[ "${1:-}" == "--find" ]]; then
   echo "Zoeken naar een NTFY_TOPIC dat je elders al gebruikt..."
+  echo "(doorzoekt je home-map, dit duurt een halve minuut)"
   echo
-  {
-    # Losse .env-achtige bestanden, niet dieper dan drie mappen — anders duurt
-    # het eeuwig en komen we in caches en node_modules terecht.
-    find "$HOME" -maxdepth 3 \
-         \( -name ".env" -o -name "*.env" -o -name "*.envrc" \) \
-         -type f -print0 2>/dev/null
-    find "$HOME/.config" "$HOME/Library/Application Support" -maxdepth 4 \
-         -type f \( -name "*.conf" -o -name "*.yml" -o -name "*.yaml" -o -name "*.json" \) \
-         -print0 2>/dev/null
-  } | xargs -0 grep -l -i "ntfy" 2>/dev/null | while read -r file; do
-        topic=$(grep -i -h -m1 -E "NTFY_TOPIC[=:][[:space:]]*[\"']?([A-Za-z0-9_-]+)|ntfy\.sh/[A-Za-z0-9_-]+" "$file" 2>/dev/null || true)
-        [[ -n "$topic" ]] && echo "  $file"$'\n'"    $topic"
-      done
+
+  candidates=$(mktemp)
+  trap 'rm -f "$candidates"' EXIT
+
+  # Zware mappen overslaan, anders duurt het eeuwig.
+  find "$HOME" \
+       \( -name node_modules -o -name .git -o -name Caches -o -name .venv \
+          -o -name "*.app" -o -name Photos\ Library.photoslibrary \) -prune -o \
+       -type f \( -name ".env" -o -name "*.env" -o -name ".envrc" \
+          -o -name "*.conf" -o -name "*.yml" -o -name "*.yaml" -o -name "*.json" \
+          -o -name "*.sh" \) -print 2>/dev/null \
+    | head -20000 > "$candidates" || true
+
+  found=0
+  while IFS= read -r file; do
+    line=$(grep -i -h -m1 -E "NTFY_TOPIC[=:]|ntfy\.sh/" "$file" 2>/dev/null || true)
+    if [[ -n "$line" ]]; then
+      echo "  $file"
+      echo "      ${line#"${line%%[![:space:]]*}"}"
+      found=$((found + 1))
+    fi
+  done < "$candidates"
+
   echo
-  echo "Niets gevonden? Kijk in de ntfy-app op je telefoon: daar staan de topics"
-  echo "waarop je geabonneerd bent."
+  if [[ $found -eq 0 ]]; then
+    echo "Geen bestaand topic gevonden in je bestanden."
+    echo "Kijk in de ntfy-app op je telefoon: daar staan de topics waarop je"
+    echo "geabonneerd bent. Of maak een nieuw topic met: ./setup-ntfy.sh"
+  else
+    echo "$found bestand(en) met een ntfy-verwijzing gevonden."
+    echo "Zet het gewenste topic met: ./setup-ntfy.sh <topicnaam>"
+  fi
   exit 0
 fi
 
