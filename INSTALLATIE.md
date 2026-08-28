@@ -210,15 +210,20 @@ Dat toont alle optievelden van de eerste auto's en of de trekhaak herkend werd.
 
 ### Push naar je telefoon
 
-Installeer de [ntfy](https://ntfy.sh)-app, verzin een topicnaam die niemand kan
-raden, abonneer je erop in de app en zet dezelfde naam in `.env`:
+Installeer de [ntfy](https://ntfy.sh)-app en laat het script de rest doen:
 
-```
-NTFY_TOPIC=tesla-nl-iets-unieks-hier
+```bash
+./setup-ntfy.sh mijn-topic-naam
 ```
 
-Wie het topic kent kan de meldingen meelezen, dus houd het voor jezelf. Zonder
-`NTFY_TOPIC` krijg je alleen een melding op je Mac.
+Dat zet `NTFY_TOPIC` in `.env` (een bestaande waarde wordt vervangen), zet de
+rechten op 600 en stuurt meteen een testmelding. Zonder argument stelt het een
+onraadbare naam voor; met `--find` zoekt het naar een topic dat je elders al
+gebruikt.
+
+Wie het topic kent kan de meldingen meelezen — VIN, prijs en link — dus kies
+iets dat niet te raden is en houd het voor jezelf. Zonder `NTFY_TOPIC` krijg je
+alleen een melding op je Mac.
 
 ### Elke drie uur laten draaien
 
