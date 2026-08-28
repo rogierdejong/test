@@ -122,6 +122,13 @@ Wat er onder water gebeurt:
 
 Automatisch draaien kan met `./start.sh local` (of `postgres` / `both`).
 
+De voortgang van de scraper (cookies, pagina's, fouten) gaat naar
+`results/scrape.log`. Volg het live in een tweede terminal:
+
+```bash
+tail -f results/scrape.log
+```
+
 ## 7. PostgreSQL (optioneel)
 
 Zet in `.env`:
@@ -156,6 +163,7 @@ ORDER  BY scraped_at;
 | API geeft 403 of 429 | Cookies verlopen — de server gooit ze zelf weg; roep `acquire_cookies` opnieuw aan en probeer één keer opnieuw |
 | Nul resultaten, terwijl de site ze wel toont | Controleer met `region_info()` of markt `NL` actief is en of de postcode klopt |
 | API geeft ineens 404 | Zet `TESLA_API_LOCALE_PREFIX=nl_NL` in `.env`; de aanroep gaat dan via `tesla.com/nl_NL/inventory/api/v4/...` |
+| Blijft hangen op `acquire_cookies` | Sluit Chrome volledig af (Cmd-Q, niet alleen het venster) en start opnieuw; een al draaiende Chrome kan de CDP-verbinding blokkeren. De echte foutmelding staat in `results/scrape.log` |
 | Chrome start niet / `could not find a valid chrome browser binary` | Zet `TESLA_CHROME_PATH` in `.env` naar je Chrome-binary. Er moet ook een echte desktopsessie zijn — de browser draait bewust niet headless, want headless wordt door Akamai geblokkeerd |
 | `Failed to connect to browser` | Je draait als root of zonder beeldscherm (bv. in een container of over SSH); draai dit op je eigen desktop |
 | Prijzen lijken in dollars | Dan draait preset `US`; zet `TESLA_REGION=NL` in `.env` |
