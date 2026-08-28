@@ -5,7 +5,9 @@ description = "Tesla inventory scraper — MCP server with nodriver + curl_cffi"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=2.0.0",
-    "nodriver>=0.38",
+    # 0.50.3+ is required: older versions choke on cookies from current
+# Chrome builds, which no longer send the removed "sameParty" field.
+    "nodriver>=0.50.3",
     "curl_cffi>=0.7.0",
     "asyncpg>=0.30.0",
     "python-dotenv>=1.0.0",

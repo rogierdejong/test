@@ -114,6 +114,23 @@ def test_unknown_region_falls_back_to_nl() -> None:
     assert get_region("does-not-exist").market == "NL"
 
 
+def test_nodriver_parses_cookies_without_sameparty() -> None:
+    """Current Chrome builds no longer send the removed "sameParty" field.
+
+    nodriver < 0.50.3 required it, so reading the Akamai cookies blew up inside
+    its background listener and cookie acquisition hung until it timed out.
+    """
+    from nodriver.cdp.network import Cookie
+
+    cookie = Cookie.from_json({
+        "name": "_abck", "value": "…", "domain": ".tesla.com", "path": "/",
+        "size": 889, "httpOnly": False, "secure": True, "session": False,
+        "priority": "Medium", "sourceScheme": "Secure", "sourcePort": 443,
+        "expires": 1819449413.49, "sameSite": "None",
+    })
+    assert cookie.name == "_abck"
+
+
 def test_all_presets_are_coherent() -> None:
     for name, region in REGIONS.items():
         assert region.name == name
