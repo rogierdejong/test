@@ -1,7 +1,12 @@
-"""Watch the inventory for cars matching a saved filter and alert on new hits.
+"""Watch the inventory: report everything new, and what meets your criteria.
 
-Default filter: a 2023 Model Y occasion with a tow hitch, in any colour but
-white. Run it once by hand, or every few hours from launchd:
+Two layers. The *scope* is what gets tracked — by default every Model Y
+occasion in the market. Anything appearing there is announced, whatever its
+specs. The *criteria* are your own requirements (by default a 2023 Model Y
+with a tow hitch, in any colour but white); every alert carries the current
+list of cars that meet them.
+
+Run it once by hand, or every few hours from launchd:
 
     uv run python -m tesla_mcp.watch              # check now, notify on new hits
     uv run python -m tesla_mcp.watch --explain    # show the raw option fields
@@ -33,6 +38,11 @@ from tesla_mcp.scraper import CookieManager, InventoryClient
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 STATE_FILE = RESULTS_DIR / "watch_state.json"
 MATCHES_CSV = RESULTS_DIR / "matches.csv"
+OVERVIEW_FILE = RESULTS_DIR / "overzicht.txt"
+
+# Bumped when the meaning of the state file changes: v1 only tracked cars that
+# met the criteria, v2 tracks the whole scope so anything new can be reported.
+_STATE_VERSION = 2
 
 # Option groups Tesla returns in upper case (PAINT, WHEELS, ADL_OPTS, ...),
 # plus the raw option-code fields.
@@ -267,23 +277,53 @@ def notify_ntfy(topic: str, title: str, body: str, click: str = "") -> bool:
         return False
 
 
-def announce(vehicles: list[dict], criteria: Criteria, dry_run: bool = False) -> None:
-    topic = _env("NTFY_TOPIC")
-    count = len(vehicles)
-    title = f"{count} nieuwe Tesla{'s' if count != 1 else ''} gevonden"
-    lines = [summarize(v, criteria) for v in vehicles]
-    body = "\n".join(lines[:5])
-    if count > 5:
-        body += f"\n… en {count - 5} meer"
+def _lines(vehicles: list[dict], criteria: Criteria, limit: int = 5) -> str:
+    shown = [f"• {summarize(v, criteria)}" for v in vehicles[:limit]]
+    if len(vehicles) > limit:
+        shown.append(f"… en {len(vehicles) - limit} meer")
+    return "\n".join(shown)
+
+
+def compose(new: list[dict], matches: list[dict], criteria: Criteria,
+            total: int, first_run: bool) -> tuple[str, str]:
+    """Title and body for one alert."""
+    if first_run:
+        title = f"Wachter gestart — {total} auto's in beeld"
+        opening = (f"{total} auto's in de voorraad. Vanaf nu krijg je bericht "
+                   "zodra er eentje bijkomt.")
+    else:
+        title = f"{len(new)} nieuw in de voorraad"
+        if matches:
+            title += f" — {len(matches)} voldoet aan je eisen" if len(matches) == 1 \
+                else f" — {len(matches)} voldoen aan je eisen"
+        opening = _lines(new, criteria)
+
+    if matches:
+        body = (f"{opening}\n\n"
+                f"Voldoet aan je eisen ({criteria.describe()}):\n"
+                f"{_lines(matches, criteria)}")
+    else:
+        body = f"{opening}\n\nNiets in de voorraad dat aan je eisen voldoet."
+    return title, body
+
+
+def announce(new: list[dict], matches: list[dict], criteria: Criteria,
+             total: int, first_run: bool = False, dry_run: bool = False) -> None:
+    title, body = compose(new, matches, criteria, total, first_run)
 
     if dry_run:
-        print(f"[dry-run] melding: {title}\n{body}")
+        print(f"\n[dry-run] melding: {title}\n{body}")
         return
 
     if not notify_macos(title, body):
         print("(geen macOS-melding verstuurd)", file=sys.stderr)
+
+    topic = _env("NTFY_TOPIC")
     if topic:
-        click = listing_url(vehicles[0], criteria) if count == 1 else ""
+        # Klik gaat naar de goedkoopste auto die aan je eisen voldoet, anders
+        # naar de eerste nieuwe.
+        target = (matches or new or [None])[0]
+        click = listing_url(target, criteria) if target else ""
         if notify_ntfy(topic, title, body, click):
             print(f"Push verstuurd naar ntfy topic {topic!r}")
     else:
@@ -332,10 +372,27 @@ def record_matches(vehicles: list[dict], criteria: Criteria) -> None:
             })
 
 
+def write_overview(matches: list[dict], criteria: Criteria, total: int) -> None:
+    """Full list of currently matching cars — the alert only shows the first few."""
+    RESULTS_DIR.mkdir(exist_ok=True)
+    lines = [
+        f"Overzicht van {time.strftime('%Y-%m-%d %H:%M')}",
+        f"Voorraad in beeld : {total} auto's",
+        f"Jouw eisen        : {criteria.describe()}",
+        f"Voldoet daaraan   : {len(matches)}",
+        "",
+    ]
+    for v in matches:
+        lines.append(summarize(v, criteria))
+        lines.append(f"    {listing_url(v, criteria)}")
+    OVERVIEW_FILE.write_text("\n".join(lines) + "\n")
+
+
 # ── Run ───────────────────────────────────────────────────────────────
 
 
 async def fetch_vehicles(criteria: Criteria) -> list[dict]:
+    """Fetch the whole scope — no year filter, so anything new is spotted."""
     cookies = await CookieManager().acquire(
         model=criteria.model, condition=criteria.condition
     )
@@ -344,8 +401,6 @@ async def fetch_vehicles(criteria: Criteria) -> list[dict]:
         model=criteria.model,
         condition=criteria.condition,
         n=criteria.top_n,
-        year_min=criteria.year_min,
-        year_max=criteria.year_max,
     )
     return vehicles
 
@@ -361,8 +416,8 @@ def explain(vehicles: list[dict], limit: int = 3) -> None:
 
 
 def run(vehicles: list[dict], criteria: Criteria, dry_run: bool) -> int:
-    reasons: dict[str, int] = {}
     matches: list[dict] = []
+    reasons: dict[str, int] = {}
     for v in vehicles:
         reason = reject_reason(v, criteria)
         if reason is None:
@@ -370,39 +425,50 @@ def run(vehicles: list[dict], criteria: Criteria, dry_run: bool) -> int:
         else:
             reasons[reason] = reasons.get(reason, 0) + 1
 
-    print(f"Filter    : {criteria.describe()}")
-    print(f"Bekeken   : {len(vehicles)} auto's")
-    print(f"Match     : {len(matches)}")
-    if reasons:
-        print("Afgevallen: " + ", ".join(f"{n}x {r}" for r, n in sorted(reasons.items())))
-
     state = load_state()
     seen = state["seen"]
-    fresh = [v for v in matches if v.get("VIN") and v["VIN"] not in seen]
+    # A v1 state only held matching cars, so treating it as "already seen"
+    # would hide everything else forever; seed instead of flooding.
+    first_run = state.get("version") != _STATE_VERSION or not seen
 
+    new = [v for v in vehicles if v.get("VIN") and v["VIN"] not in seen]
+
+    print(f"Voorraad  : {len(vehicles)} auto's ({criteria.model.upper()} "
+          f"{criteria.condition})")
+    print(f"Jouw eisen: {criteria.describe()}")
+    print(f"Voldoet   : {len(matches)}")
+    if reasons:
+        print("Afgevallen: " + ", ".join(f"{n}x {r}" for r, n in sorted(reasons.items())))
+    print(f"Nieuw     : {'eerste run — voorraad wordt vastgelegd' if first_run else len(new)}")
+
+    if not first_run:
+        for v in new:
+            print(f"  • {summarize(v, criteria)}")
     for v in matches:
-        vin = v.get("VIN")
-        if vin:
-            seen[vin] = {
-                "last_seen": time.strftime("%Y-%m-%d %H:%M"),
-                "price": v.get("TotalPrice") or v.get("Price"),
-            }
-
-    if not fresh:
-        print("Nieuw     : geen (alles al eerder gemeld)")
-        if not dry_run:
-            save_state(state)
-        return 0
-
-    print(f"Nieuw     : {len(fresh)}")
-    for v in fresh:
-        print(f"  • {summarize(v, criteria)}")
+        marker = "NIEUW " if any(v is n for n in new) and not first_run else ""
+        print(f"  ✓ {marker}{summarize(v, criteria)}")
         print(f"    {listing_url(v, criteria)}")
 
+    now = time.strftime("%Y-%m-%d %H:%M")
+    for v in vehicles:
+        vin = v.get("VIN")
+        if vin:
+            seen[vin] = {"last_seen": now,
+                         "price": v.get("TotalPrice") or v.get("Price")}
+    state["version"] = _STATE_VERSION
+
     if not dry_run:
-        record_matches(fresh, criteria)
+        write_overview(matches, criteria, len(vehicles))
+        record_matches([v for v in matches if v in new] if not first_run else matches,
+                       criteria)
         save_state(state)
-    announce(fresh, criteria, dry_run=dry_run)
+        print(f"Overzicht : {OVERVIEW_FILE}")
+
+    if first_run or new:
+        announce(new, matches, criteria, total=len(vehicles),
+                 first_run=first_run, dry_run=dry_run)
+    else:
+        print("Geen melding — er is niets bijgekomen.")
     return 0
 
 

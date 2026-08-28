@@ -316,6 +316,63 @@ def test_tow_detection_on_real_nl_records() -> None:
     assert reject_reason(plain_2023, criteria) == "geen trekhaak"
 
 
+def test_alert_reports_everything_new_plus_current_matches() -> None:
+    """Anything new is announced, whatever its specs, with the matches list."""
+    from tesla_mcp import watch as w
+
+    criteria = w.Criteria()
+    new = [{"VIN": "A", "Year": 2021, "TrimName": "Long Range", "PAINT": ["PEARLWHITE"],
+            "TotalPrice": 27500, "Odometer": 98000, "City": "Zwolle"}]
+    matches = [{"VIN": "B", "Year": 2023, "TrimName": "Long Range", "PAINT": ["BLUE"],
+                "TotalPrice": 33300, "Odometer": 44349, "City": "Den Haag",
+                "OptionCodeList": "$MTY13,$TW01"}]
+
+    title, body = w.compose(new, matches, criteria, total=6, first_run=False)
+
+    assert title.startswith("1 nieuw")
+    assert "1 voldoet aan je eisen" in title
+    # The new car fails every criterion but is still reported.
+    assert "PEARLWHITE" in body and "Zwolle" in body
+    assert "Voldoet aan je eisen" in body and "Den Haag" in body
+
+
+def test_first_run_seeds_instead_of_flooding() -> None:
+    """Upgrading from the match-only state must not announce the whole market."""
+    import tempfile
+    from tesla_mcp import watch as w
+
+    tmp = Path(tempfile.mkdtemp())
+    sent: list[tuple] = []
+    saved = (w.STATE_FILE, w.MATCHES_CSV, w.OVERVIEW_FILE, w.RESULTS_DIR, w.announce)
+    w.RESULTS_DIR, w.STATE_FILE = tmp, tmp / "state.json"
+    w.MATCHES_CSV, w.OVERVIEW_FILE = tmp / "m.csv", tmp / "o.txt"
+    w.announce = lambda new, matches, criteria, total, first_run=False, dry_run=False: \
+        sent.append((len(new), len(matches), first_run))
+
+    vehicles = [
+        {"VIN": "A", "Year": 2023, "PAINT": ["BLUE"], "OptionCodeList": "$TW01"},
+        {"VIN": "B", "Year": 2021, "PAINT": ["PEARLWHITE"]},
+    ]
+    try:
+        w.run(vehicles, w.Criteria(), dry_run=False)
+        state = json.loads((tmp / "state.json").read_text())
+        assert state["version"] == 2
+        assert set(state["seen"]) == {"A", "B"}, "hele scope wordt vastgelegd"
+        assert sent == [(2, 1, True)], "één startmelding, geen vloedgolf"
+
+        # Niets veranderd → geen tweede melding.
+        w.run(vehicles, w.Criteria(), dry_run=False)
+        assert len(sent) == 1
+
+        # Eén nieuwe die niet aan de eisen voldoet → tóch een melding.
+        w.run(vehicles + [{"VIN": "C", "Year": 2019, "PAINT": ["BLACK"]}],
+              w.Criteria(), dry_run=False)
+        assert sent[-1] == (1, 1, False)
+    finally:
+        (w.STATE_FILE, w.MATCHES_CSV, w.OVERVIEW_FILE,
+         w.RESULTS_DIR, w.announce) = saved
+
+
 def test_watch_price_and_odometer_limits() -> None:
     from tesla_mcp.watch import Criteria, reject_reason
 

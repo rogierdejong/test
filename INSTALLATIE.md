@@ -157,9 +157,15 @@ ORDER  BY scraped_at;
 
 ## 8. Wachter: automatisch zoeken en een melding krijgen
 
-De wachter controleert de voorraad tegen een vast filter en waarschuwt zodra er
-een auto bijkomt die eraan voldoet. Standaardfilter: **Model Y, bouwjaar 2023,
-occasion, met trekhaak, elke kleur behalve wit.**
+De wachter werkt in twee lagen:
+
+1. **Wat hij volgt** — standaard alle Model Y-occasions in Nederland. Komt daar
+   een auto bij, dan krijg je bericht, **ongeacht de specs**.
+2. **Jouw eisen** — standaard bouwjaar 2023, met trekhaak, elke kleur behalve
+   wit. Élke melding bevat het actuele lijstje auto's dat daaraan voldoet.
+
+Zo mis je geen enkele nieuwe advertentie, en zie je in één oogopslag wat er op
+dat moment interessant voor je is.
 
 ### Eerst met de hand
 
@@ -170,17 +176,25 @@ uv run python -m tesla_mcp.watch
 Je krijgt een overzicht als dit:
 
 ```
-Filter    : MY used, 2023-2023, met trekhaak, niet white
-Bekeken   : 34 auto's
-Match     : 2
-Afgevallen: 18x verkeerde kleur, 9x geen trekhaak, 5x bouwjaar te oud
-Nieuw     : 2
-  • 2023 Long Range AWD — €34.990, 41.000 km, MIDNIGHTSILVER, Utrecht
+Voorraad  : 22 auto's (MY used)
+Jouw eisen: MY used, 2023-2023, met trekhaak, niet white
+Voldoet   : 3
+Afgevallen: 12x verkeerde kleur, 5x geen trekhaak, 2x bouwjaar te oud
+Nieuw     : 1
+  • 2024 Long Range AWD — €38.900, 21.000 km, BLACK, Utrecht
+  ✓ 2023 Achterwielaandrijving — €33.300, 44.349 km, BLUE, Den Haag
 ```
 
-Elke nieuwe match komt in `results/matches.csv`. Gemelde VIN's worden onthouden
-in `results/watch_state.json`, dus je krijgt een auto één keer te zien en niet
-elke drie uur opnieuw.
+Regels met `•` zijn nieuw in de voorraad, regels met `✓` voldoen aan je eisen.
+
+De eerste run legt de bestaande voorraad vast en meldt alleen dat hij begonnen
+is — anders zou je meteen twintig meldingen krijgen. Daarna hoor je alleen van
+wat er bijkomt.
+
+Het volledige lijstje dat aan je eisen voldoet staat na elke run in
+`results/overzicht.txt` (de melding zelf toont de eerste vijf). Nieuwe treffers
+komen in `results/matches.csv`, en gemelde VIN's worden onthouden in
+`results/watch_state.json`.
 
 De trekhaak wordt herkend aan optiecode `$TW01` in `OptionCodeList`, aan
 `ADL_OPTS = ['TOWING']`, of aan een `OptionCodeData`-regel met groep `TOWING`.
@@ -250,8 +264,8 @@ tail -f results/watch.log
 Alles staat in `.env`:
 
 ```
-WATCH_MODEL=my            # my, m3, ms, mx
-WATCH_YEAR_MIN=2023
+WATCH_MODEL=my            # my, m3, ms, mx — bepaalt wat er gevolgd wordt
+WATCH_YEAR_MIN=2023       # vanaf hier: jouw eisen, niet wat er gevolgd wordt
 WATCH_YEAR_MAX=2023
 WATCH_REQUIRE_TOW=1       # 0 = trekhaak niet vereist
 WATCH_EXCLUDE_PAINT=WHITE # komma's voor meerdere, bv. WHITE,BLACK

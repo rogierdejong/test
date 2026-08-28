@@ -207,9 +207,10 @@ See [`data dictionary.md`](data%20dictionary.md) for the full field reference.
 
 ## Watching for a specific car
 
-`uv run python -m tesla_mcp.watch` checks the inventory against a saved filter
-(by default: a 2023 Model Y with a tow hitch, any colour but white) and alerts
-on cars it has not reported before — a macOS notification, and a phone push via
+`uv run python -m tesla_mcp.watch` tracks a scope (by default every used Model
+Y) and alerts on anything new in it, whatever its specs — each alert carrying
+the current list of cars that meet your own criteria (by default a 2023 Model Y
+with a tow hitch, any colour but white) — a macOS notification, and a phone push via
 ntfy.sh when `NTFY_TOPIC` is set (`./setup-ntfy.sh <topic>` configures and
 tests that in one go). `./install-watch.sh` schedules it through
 launchd. See [`INSTALLATIE.md`](INSTALLATIE.md) for the details.
