@@ -12,6 +12,10 @@ from tesla_mcp.config import REGION, RegionConfig, chrome_executable, default_ra
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 
+# Chrome occasionally refuses the first connection; retry before giving up.
+_BROWSER_START_ATTEMPTS = 3
+_BROWSER_RETRY_DELAY = 4.0
+
 
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
@@ -111,15 +115,32 @@ class CookieManager:
         chrome_path = chrome_executable()
         _log(f"Launching Chrome to acquire Akamai cookies{f' ({chrome_path})' if chrome_path else ''}...")
 
-        browser = await _step(
-            "starting Chrome",
-            uc.start(
-                headless=False,
-                browser_args=["--no-first-run", "--no-default-browser-check"],
-                **({"browser_executable_path": chrome_path} if chrome_path else {}),
-            ),
-            timeout=60,
-        )
+        # A first launch that cannot connect is usually transient: a previous
+        # Chrome is still shutting down and holding the debugging port.
+        browser = None
+        for attempt in range(1, _BROWSER_START_ATTEMPTS + 1):
+            try:
+                browser = await _step(
+                    f"starting Chrome (poging {attempt}/{_BROWSER_START_ATTEMPTS})",
+                    uc.start(
+                        headless=False,
+                        browser_args=["--no-first-run", "--no-default-browser-check"],
+                        **({"browser_executable_path": chrome_path} if chrome_path else {}),
+                    ),
+                    timeout=60,
+                )
+                break
+            except Exception as exc:
+                if attempt == _BROWSER_START_ATTEMPTS:
+                    raise RuntimeError(
+                        f"Chrome kon niet gestart worden na {_BROWSER_START_ATTEMPTS} "
+                        f"pogingen ({exc}). Sluit Chrome volledig af (Cmd-Q op macOS) "
+                        "en probeer opnieuw; werkt het dan nog niet, zet "
+                        "TESLA_CHROME_PATH in .env naar je Chrome-binary."
+                    ) from exc
+                _log(f"  Chrome start mislukt ({exc}); opnieuw over "
+                     f"{_BROWSER_RETRY_DELAY:.0f}s...")
+                await asyncio.sleep(_BROWSER_RETRY_DELAY)
 
         try:
             # Warm up on the localised homepage — lets Akamai JS set initial cookies

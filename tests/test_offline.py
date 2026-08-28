@@ -172,6 +172,67 @@ def test_all_presets_are_coherent() -> None:
         assert region.inventory_url("new", "m3").endswith("/inventory/new/m3")
 
 
+def test_chrome_start_is_retried() -> None:
+    """A first launch that cannot connect is transient — retry before failing.
+
+    Chrome refusing the debugging port right after a previous run shut down
+    used to abort the whole check with "Failed to connect to browser".
+    """
+    import asyncio as _asyncio
+    import types
+
+    calls = {"start": 0}
+
+    class _FakeCookie:
+        def __init__(self, name):
+            self.name, self.value = name, "x"
+
+    class _FakePage:
+        async def evaluate(self, _js):
+            return "Nieuwe en gebruikte elektrische auto's | Tesla"
+
+        async def send(self, _cmd):
+            return [_FakeCookie("_abck"), _FakeCookie("bm_sz")]
+
+    class _FakeBrowser:
+        async def get(self, _url):
+            return _FakePage()
+
+        def stop(self):
+            pass
+
+    async def _start(**_kwargs):
+        calls["start"] += 1
+        if calls["start"] < 3:
+            raise Exception("Failed to connect to browser")
+        return _FakeBrowser()
+
+    fake = types.ModuleType("nodriver")
+    fake.start = _start
+    fake.cdp = types.SimpleNamespace(
+        network=types.SimpleNamespace(get_cookies=lambda: "get_cookies")
+    )
+    saved_module = sys.modules.get("nodriver")
+    saved_sleep = _asyncio.sleep
+
+    async def _no_sleep(_seconds):
+        return None
+
+    sys.modules["nodriver"] = fake
+    _asyncio.sleep = _no_sleep
+    try:
+        cookies = _asyncio.run(scraper.CookieManager().acquire())
+    finally:
+        _asyncio.sleep = saved_sleep
+        if saved_module is not None:
+            sys.modules["nodriver"] = saved_module
+        else:
+            del sys.modules["nodriver"]
+
+    assert calls["start"] == 3, "moet twee keer opnieuw proberen"
+    assert cookies == {"_abck": "x", "bm_sz": "x"}
+
+
 def test_watch_filter_picks_the_right_cars() -> None:
     from tesla_mcp.watch import Criteria, reject_reason
 

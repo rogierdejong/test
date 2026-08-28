@@ -385,7 +385,12 @@ def main(argv: list[str] | None = None) -> int:
         data = json.loads(Path(args.from_file).read_text())
         vehicles = data.get("results", data) if isinstance(data, dict) else data
     else:
-        vehicles = asyncio.run(fetch_vehicles(criteria))
+        try:
+            vehicles = asyncio.run(fetch_vehicles(criteria))
+        except Exception as exc:
+            # Runs unattended from launchd — one clear line beats a traceback.
+            print(f"Ophalen mislukt: {exc}", file=sys.stderr)
+            return 1
 
     if args.explain:
         explain(vehicles)

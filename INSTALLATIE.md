@@ -262,7 +262,7 @@ cookiestappen één voor één af met de melding welke stap faalt.
 | `KeyError: 'sameParty'` of hangen bij het uitlezen van cookies | Te oude `nodriver`; vanaf 0.50.3 is dit opgelost. Draai `uv sync` na een `git pull` |
 | Blijft hangen op `acquire_cookies` | Draai `uv run python -m tesla_mcp.diagnose` — die loopt dezelfde stappen los af en zegt welke vastloopt. Meestal: Chrome draaide al, sluit hem volledig af met Cmd-Q. Elke stap heeft nu een timeout van 60 seconden, dus een hang eindigt met een duidelijke melding in plaats van eeuwig wachten |
 | Chrome start niet / `could not find a valid chrome browser binary` | Zet `TESLA_CHROME_PATH` in `.env` naar je Chrome-binary. Er moet ook een echte desktopsessie zijn — de browser draait bewust niet headless, want headless wordt door Akamai geblokkeerd |
-| `Failed to connect to browser` | Je draait als root of zonder beeldscherm (bv. in een container of over SSH); draai dit op je eigen desktop |
+| `Failed to connect to browser` | Meestal houdt een net afgesloten Chrome de debugpoort nog vast; de scraper probeert het nu zelf drie keer. Blijft het mislukken: sluit Chrome volledig af met Cmd-Q. Draai je als root of zonder beeldscherm (container, SSH), dan werkt het sowieso niet — dit hoort op je eigen desktop |
 | Prijzen lijken in dollars | Dan draait preset `US`; zet `TESLA_REGION=NL` in `.env` |
 
 Let op: dit haalt alleen publieke voorraadpagina's op. Houd het bij een

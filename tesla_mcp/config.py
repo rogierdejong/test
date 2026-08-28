@@ -165,10 +165,32 @@ def get_region(name: str | None = None) -> RegionConfig:
     )
 
 
+# Where Chrome normally lives, per platform. nodriver can usually find it
+# itself, but not always — and when it cannot, the error is obscure.
+_CHROME_CANDIDATES = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/opt/homebrew/bin/chromium",
+)
+
+
 def chrome_executable() -> str | None:
-    """Explicit Chrome binary path, or None to let nodriver auto-detect."""
+    """Path to the Chrome binary — from TESLA_CHROME_PATH, else auto-detected.
+
+    Returns None when nothing is found, leaving nodriver to try its own search.
+    """
     path = os.getenv("TESLA_CHROME_PATH", "").strip()
-    return path or None
+    if path:
+        return path
+    for candidate in _CHROME_CANDIDATES:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def default_radius() -> int:
