@@ -155,7 +155,91 @@ WHERE  vin = '<VIN>' AND market = 'NL'
 ORDER  BY scraped_at;
 ```
 
-## 8. Als er iets misgaat
+## 8. Wachter: automatisch zoeken en een melding krijgen
+
+De wachter controleert de voorraad tegen een vast filter en waarschuwt zodra er
+een auto bijkomt die eraan voldoet. Standaardfilter: **Model Y, bouwjaar 2023,
+occasion, met trekhaak, elke kleur behalve wit.**
+
+### Eerst met de hand
+
+```bash
+uv run python -m tesla_mcp.watch
+```
+
+Je krijgt een overzicht als dit:
+
+```
+Filter    : MY used, 2023-2023, met trekhaak, niet white
+Bekeken   : 34 auto's
+Match     : 2
+Afgevallen: 18x verkeerde kleur, 9x geen trekhaak, 5x bouwjaar te oud
+Nieuw     : 2
+  • 2023 Long Range AWD — €34.990, 41.000 km, MIDNIGHTSILVER, Utrecht
+```
+
+Elke nieuwe match komt in `results/matches.csv`. Gemelde VIN's worden onthouden
+in `results/watch_state.json`, dus je krijgt een auto één keer te zien en niet
+elke drie uur opnieuw.
+
+### Het trekhaakfilter ijken
+
+Of Tesla de trekhaak in het veld `TOWING` zet of in een optiecode verschilt per
+markt. Klopt de telling niet — bijvoorbeeld "0 met trekhaak" terwijl de site ze
+wel toont — kijk dan wat er echt in de data staat:
+
+```bash
+uv run python -m tesla_mcp.watch --explain
+```
+
+Dat toont alle optievelden van de eerste auto's en of de trekhaak herkend werd.
+
+### Push naar je telefoon
+
+Installeer de [ntfy](https://ntfy.sh)-app, verzin een topicnaam die niemand kan
+raden, abonneer je erop in de app en zet dezelfde naam in `.env`:
+
+```
+NTFY_TOPIC=tesla-nl-iets-unieks-hier
+```
+
+Wie het topic kent kan de meldingen meelezen, dus houd het voor jezelf. Zonder
+`NTFY_TOPIC` krijg je alleen een melding op je Mac.
+
+### Elke drie uur laten draaien
+
+```bash
+./install-watch.sh            # elke 3 uur
+./install-watch.sh 3600       # elk uur
+./install-watch.sh --uninstall
+```
+
+Dit zet een launchd-taak in `~/Library/LaunchAgents`. Elke controle opent kort
+een Chrome-venster voor de Akamai-check — dat hoort erbij, laat het staan tot
+het vanzelf sluit. Je Mac moet wakker zijn; slaapt hij, dan haalt launchd de
+controle in zodra hij ontwaakt.
+
+Meekijken:
+
+```bash
+tail -f results/watch.log
+```
+
+### Het filter aanpassen
+
+Alles staat in `.env`:
+
+```
+WATCH_MODEL=my            # my, m3, ms, mx
+WATCH_YEAR_MIN=2023
+WATCH_YEAR_MAX=2023
+WATCH_REQUIRE_TOW=1       # 0 = trekhaak niet vereist
+WATCH_EXCLUDE_PAINT=WHITE # komma's voor meerdere, bv. WHITE,BLACK
+WATCH_MAX_PRICE=40000     # optioneel
+WATCH_ODOMETER_MAX=60000  # optioneel, in km
+```
+
+## 9. Als er iets misgaat
 
 Eerste stap bij twijfel:
 

@@ -205,6 +205,14 @@ Each vehicle record from Tesla's API contains ~123 fields. This tool extracts 34
 
 See [`data dictionary.md`](data%20dictionary.md) for the full field reference.
 
+## Watching for a specific car
+
+`uv run python -m tesla_mcp.watch` checks the inventory against a saved filter
+(by default: a 2023 Model Y with a tow hitch, any colour but white) and alerts
+on cars it has not reported before — a macOS notification, and a phone push via
+ntfy.sh when `NTFY_TOPIC` is set. `./install-watch.sh` schedules it through
+launchd. See [`INSTALLATIE.md`](INSTALLATIE.md) for the details.
+
 ## Tech Stack
 
 - [`fastmcp`](https://github.com/jlowin/fastmcp) — MCP server framework

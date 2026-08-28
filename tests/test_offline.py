@@ -172,6 +172,46 @@ def test_all_presets_are_coherent() -> None:
         assert region.inventory_url("new", "m3").endswith("/inventory/new/m3")
 
 
+def test_watch_filter_picks_the_right_cars() -> None:
+    from tesla_mcp.watch import Criteria, reject_reason
+
+    criteria = Criteria()  # 2023 Model Y, tow hitch, not white
+    cars = {
+        "hit": {"VIN": "1", "Year": 2023, "PAINT": ["MIDNIGHTSILVER"], "TOWING": ["TW01"]},
+        "wit": {"VIN": "2", "Year": 2023, "PAINT": ["PEARLWHITE"], "TOWING": ["TW01"]},
+        "geen trekhaak": {"VIN": "3", "Year": 2023, "PAINT": ["DEEPBLUE"]},
+        "te oud": {"VIN": "4", "Year": 2022, "PAINT": ["SOLIDBLACK"], "TOWING": ["TW01"]},
+        "optiecode": {"VIN": "5", "Year": 2023, "PAINT": ["ULTRARED"],
+                      "OptionCodeList": "MY23,TW01,PPMR"},
+    }
+
+    assert reject_reason(cars["hit"], criteria) is None
+    assert reject_reason(cars["optiecode"], criteria) is None
+    assert reject_reason(cars["wit"], criteria) == "verkeerde kleur"
+    assert reject_reason(cars["geen trekhaak"], criteria) == "geen trekhaak"
+    assert reject_reason(cars["te oud"], criteria) == "bouwjaar te oud"
+
+
+def test_tow_detection_ignores_free_text() -> None:
+    """Only option groups count — a city called Towcester is not a tow hitch."""
+    from tesla_mcp.watch import has_tow_hitch
+
+    assert not has_tow_hitch({"City": "Towcester", "TrimName": "Long Range"})
+    assert has_tow_hitch({"TOWING": ["TW01"], "City": "Utrecht"})
+
+
+def test_watch_price_and_odometer_limits() -> None:
+    from tesla_mcp.watch import Criteria, reject_reason
+
+    criteria = Criteria(require_tow=False, exclude_paint=(), max_price=35000,
+                        odometer_max=50000)
+    assert reject_reason({"Year": 2023, "TotalPrice": 39900}, criteria) == "te duur"
+    assert reject_reason({"Year": 2023, "TotalPrice": 30000,
+                          "Odometer": 61000}, criteria) == "te veel kilometers"
+    assert reject_reason({"Year": 2023, "TotalPrice": 30000,
+                          "Odometer": 40000}, criteria) is None
+
+
 def main() -> int:
     _clear_env_overrides()
     _install_fake_curl_cffi()
