@@ -157,13 +157,23 @@ ORDER  BY scraped_at;
 
 ## 8. Als er iets misgaat
 
+Eerste stap bij twijfel:
+
+```bash
+uv run python -m tesla_mcp.diagnose
+```
+
+Dit controleert de omgeving (Chrome-pad, draait Chrome al, is er een
+desktopsessie), test of `tesla.com/nl_NL` bereikbaar is, en loopt daarna de
+cookiestappen één voor één af met de melding welke stap faalt.
+
 | Symptoom | Oorzaak / oplossing |
 |----------|--------------------|
 | `Access Denied` / `Toegang geweigerd` bij het ophalen van cookies | Akamai blokkeert; verhoog de `asyncio.sleep(10)` in `tesla_mcp/scraper.py` of probeer het later opnieuw |
 | API geeft 403 of 429 | Cookies verlopen — de server gooit ze zelf weg; roep `acquire_cookies` opnieuw aan en probeer één keer opnieuw |
 | Nul resultaten, terwijl de site ze wel toont | Controleer met `region_info()` of markt `NL` actief is en of de postcode klopt |
 | API geeft ineens 404 | Zet `TESLA_API_LOCALE_PREFIX=nl_NL` in `.env`; de aanroep gaat dan via `tesla.com/nl_NL/inventory/api/v4/...` |
-| Blijft hangen op `acquire_cookies` | Sluit Chrome volledig af (Cmd-Q, niet alleen het venster) en start opnieuw; een al draaiende Chrome kan de CDP-verbinding blokkeren. De echte foutmelding staat in `results/scrape.log` |
+| Blijft hangen op `acquire_cookies` | Draai `uv run python -m tesla_mcp.diagnose` — die loopt dezelfde stappen los af en zegt welke vastloopt. Meestal: Chrome draaide al, sluit hem volledig af met Cmd-Q. Elke stap heeft nu een timeout van 60 seconden, dus een hang eindigt met een duidelijke melding in plaats van eeuwig wachten |
 | Chrome start niet / `could not find a valid chrome browser binary` | Zet `TESLA_CHROME_PATH` in `.env` naar je Chrome-binary. Er moet ook een echte desktopsessie zijn — de browser draait bewust niet headless, want headless wordt door Akamai geblokkeerd |
 | `Failed to connect to browser` | Je draait als root of zonder beeldscherm (bv. in een container of over SSH); draai dit op je eigen desktop |
 | Prijzen lijken in dollars | Dan draait preset `US`; zet `TESLA_REGION=NL` in `.env` |

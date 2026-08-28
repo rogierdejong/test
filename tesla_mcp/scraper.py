@@ -17,6 +17,24 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+async def _step(label: str, coro, timeout: float):
+    """Await one browser step, logging it and failing loudly if it stalls.
+
+    Without this a wedged Chrome (an already-running instance, a profile
+    picker, a page that never finishes loading) just hangs forever with no
+    indication of which step is stuck.
+    """
+    _log(f"  -> {label}...")
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        raise RuntimeError(
+            f"Chrome stalled while {label} (no response within {timeout:.0f}s). "
+            "Quit Chrome completely (Cmd-Q on macOS) and try again; if it keeps "
+            "stalling, run: uv run python -m tesla_mcp.diagnose"
+        ) from None
+
+
 # ── Cookie acquisition via nodriver ──────────────────────────────────
 
 
@@ -56,28 +74,52 @@ class CookieManager:
         # the binary lives somewhere unusual.
         chrome_path = chrome_executable()
         _log(f"Launching Chrome to acquire Akamai cookies{f' ({chrome_path})' if chrome_path else ''}...")
-        browser = await uc.start(
-            headless=False,
-            browser_args=["--no-first-run", "--no-default-browser-check"],
-            **({"browser_executable_path": chrome_path} if chrome_path else {}),
+
+        browser = await _step(
+            "starting Chrome",
+            uc.start(
+                headless=False,
+                browser_args=["--no-first-run", "--no-default-browser-check"],
+                **({"browser_executable_path": chrome_path} if chrome_path else {}),
+            ),
+            timeout=60,
         )
 
         try:
             # Warm up on the localised homepage — lets Akamai JS set initial cookies
-            page = await browser.get(self._region.site_url)
+            page = await _step(
+                f"loading {self._region.site_url}",
+                browser.get(self._region.site_url),
+                timeout=60,
+            )
             await asyncio.sleep(5)
 
             # Navigate to inventory page — triggers full Akamai challenge
-            page = await browser.get(self._region.inventory_url(condition, model))
+            inventory_url = self._region.inventory_url(condition, model)
+            page = await _step(
+                f"loading {inventory_url}",
+                browser.get(inventory_url),
+                timeout=60,
+            )
+            _log("  waiting 10s for the Akamai challenge to complete...")
             await asyncio.sleep(10)
 
             # Verify the page loaded (not Access Denied / Toegang geweigerd)
-            title = await page.evaluate("document.title")
-            if "Access Denied" in title or "Toegang geweigerd" in title:
+            title = await _step(
+                "reading the page title",
+                page.evaluate("document.title"),
+                timeout=30,
+            )
+            _log(f"  page title: {title!r}")
+            if title and ("Access Denied" in title or "Toegang geweigerd" in title):
                 raise RuntimeError("Akamai still blocking — try increasing sleep time")
 
             # Extract cookies via CDP
-            cdp_cookies = await page.send(uc.cdp.network.get_cookies())
+            cdp_cookies = await _step(
+                "reading cookies",
+                page.send(uc.cdp.network.get_cookies()),
+                timeout=30,
+            )
             self._cookies = {c.name: c.value for c in cdp_cookies}
             self._acquired_at = time.time()
 

@@ -68,6 +68,9 @@ Claude Code ──→ /tesla skill ──→ MCP Server (tesla-inventory)
 | `save_to_postgres` | Insert scraped vehicles into PostgreSQL for historical tracking |
 | `region_info` | Show the active market, URLs and query payload (NL by default) |
 
+Stuck on cookie acquisition? `uv run python -m tesla_mcp.diagnose` walks the
+browser steps one at a time and reports which one fails.
+
 ## Supported Models
 
 | Code | Model |
