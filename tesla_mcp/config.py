@@ -16,6 +16,7 @@ code changes are needed to switch markets:
     TESLA_MARKET / TESLA_LANGUAGE / TESLA_SUPER_REGION / TESLA_API_REGION
     TESLA_LOCALE                 # URL path segment, e.g. nl_NL
     TESLA_API_LOCALE_PREFIX      # set to nl_NL to call the locale-prefixed API
+    TESLA_CHROME_PATH            # Chrome binary, if nodriver cannot find it
 """
 
 from __future__ import annotations
@@ -162,6 +163,12 @@ def get_region(name: str | None = None) -> RegionConfig:
         lng=_env_float("TESLA_LNG", base.lng),
         api_locale_prefix=os.getenv("TESLA_API_LOCALE_PREFIX", base.api_locale_prefix),
     )
+
+
+def chrome_executable() -> str | None:
+    """Explicit Chrome binary path, or None to let nodriver auto-detect."""
+    path = os.getenv("TESLA_CHROME_PATH", "").strip()
+    return path or None
 
 
 def default_radius() -> int:

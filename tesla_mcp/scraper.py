@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from tesla_mcp.config import REGION, RegionConfig, default_radius
+from tesla_mcp.config import REGION, RegionConfig, chrome_executable, default_radius
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 
@@ -52,10 +52,14 @@ class CookieManager:
 
         import nodriver as uc
 
-        _log("Launching Chrome to acquire Akamai cookies...")
+        # nodriver auto-detects Chrome; TESLA_CHROME_PATH overrides that when
+        # the binary lives somewhere unusual.
+        chrome_path = chrome_executable()
+        _log(f"Launching Chrome to acquire Akamai cookies{f' ({chrome_path})' if chrome_path else ''}...")
         browser = await uc.start(
             headless=False,
             browser_args=["--no-first-run", "--no-default-browser-check"],
+            **({"browser_executable_path": chrome_path} if chrome_path else {}),
         )
 
         try:

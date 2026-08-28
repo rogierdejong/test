@@ -93,10 +93,20 @@ Both **used** and **new** inventory are supported.
 ```bash
 git clone <this-repo>
 cd <this-repo>
+./run.sh --check              # checks prerequisites, installs, verifies config
+```
+
+Or by hand:
+
+```bash
 uv sync
 cp .env.example .env          # optional — NL defaults work without it
 uv run python -m tesla_mcp.selfcheck
 ```
+
+`./run.sh` (optionally `local` | `postgres` | `both`) runs the full scrape in
+one go. Chrome must be a real desktop Chrome — headless is blocked by Akamai —
+and `TESLA_CHROME_PATH` points at it if auto-detection fails.
 
 `selfcheck` prints the active market and the exact API request that will be
 sent, without touching the network. Expect `market: NL`, `language: nl`,

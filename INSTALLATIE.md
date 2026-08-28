@@ -19,8 +19,17 @@ met een beeldscherm (je eigen laptop), niet op een kale server.
 
 ## 2. Installeren
 
+Snelste weg — controleren, installeren en meteen scrapen:
+
 ```bash
 cd <deze-repo>
+./run.sh --check     # vereisten + installatie + configuratiecheck
+./run.sh             # de scrape zelf, resultaat als CSV in results/
+```
+
+`./run.sh both` schrijft ook naar PostgreSQL. Liever met de hand:
+
+```bash
 uv sync
 ```
 
@@ -147,7 +156,8 @@ ORDER  BY scraped_at;
 | API geeft 403 of 429 | Cookies verlopen — de server gooit ze zelf weg; roep `acquire_cookies` opnieuw aan en probeer één keer opnieuw |
 | Nul resultaten, terwijl de site ze wel toont | Controleer met `region_info()` of markt `NL` actief is en of de postcode klopt |
 | API geeft ineens 404 | Zet `TESLA_API_LOCALE_PREFIX=nl_NL` in `.env`; de aanroep gaat dan via `tesla.com/nl_NL/inventory/api/v4/...` |
-| Chrome start niet | Google Chrome moet lokaal geïnstalleerd zijn en er moet een beeldscherm/desktopsessie zijn |
+| Chrome start niet / `could not find a valid chrome browser binary` | Zet `TESLA_CHROME_PATH` in `.env` naar je Chrome-binary. Er moet ook een echte desktopsessie zijn — de browser draait bewust niet headless, want headless wordt door Akamai geblokkeerd |
+| `Failed to connect to browser` | Je draait als root of zonder beeldscherm (bv. in een container of over SSH); draai dit op je eigen desktop |
 | Prijzen lijken in dollars | Dan draait preset `US`; zet `TESLA_REGION=NL` in `.env` |
 
 Let op: dit haalt alleen publieke voorraadpagina's op. Houd het bij een
