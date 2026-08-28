@@ -193,8 +193,9 @@ waarde `<nil>` — dat is géén trekhaak.
 uv run python -m tesla_mcp.watch --test-notify
 ```
 
-Komt de macOS-melding niet door, geef je terminal dan toestemming onder
-Systeeminstellingen › Berichtgeving.
+Komt de macOS-melding niet door en zegt de foutmelding iets over toestemming,
+geef je terminal die dan onder Systeeminstellingen › Berichtgeving. De push naar
+je telefoon werkt daar los van.
 
 ### Het trekhaakfilter ijken
 

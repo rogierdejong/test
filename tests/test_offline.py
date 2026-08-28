@@ -233,6 +233,23 @@ def test_chrome_start_is_retried() -> None:
     assert cookies == {"_abck": "x", "bm_sz": "x"}
 
 
+def test_applescript_quoting_survives_accents_and_quotes() -> None:
+    """The notification text reaches osascript intact.
+
+    json.dumps turned the em dash in "Testmelding — dit werkt" into a
+    backslash-u sequence, which AppleScript rejects outright, so no macOS
+    notification was ever shown.
+    """
+    from tesla_mcp.watch import _applescript_string
+
+    quoted = _applescript_string("2023 Long Range — €34.990")
+    assert "\\u" not in quoted, "geen backslash-u escapes"
+    assert quoted == '"2023 Long Range — €34.990"'
+
+    assert _applescript_string('een "citaat"') == '"een \\"citaat\\""'
+    assert _applescript_string("pad C:\\temp") == '"pad C:\\\\temp"'
+
+
 def test_watch_filter_picks_the_right_cars() -> None:
     from tesla_mcp.watch import Criteria, reject_reason
 

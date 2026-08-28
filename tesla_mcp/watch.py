@@ -207,14 +207,26 @@ def summarize(vehicle: dict, criteria: Criteria) -> str:
 # ── Notifications ─────────────────────────────────────────────────────
 
 
+def _applescript_string(text: str) -> str:
+    """Quote a string for AppleScript.
+
+    Not json.dumps: it escapes non-ASCII as backslash-u sequences, which
+    AppleScript does not understand — an em dash in the message aborted the
+    whole script with "syntax error: unknown token". AppleScript takes UTF-8
+    as-is and only needs backslashes and double quotes escaped.
+    """
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def notify_macos(title: str, body: str) -> bool:
     if platform.system() != "Darwin":
         return False
     # Notifications carry a single line; osascript renders newlines poorly.
     one_line = body.replace("\n", " · ")
     script = (
-        f'display notification {json.dumps(one_line)} '
-        f'with title {json.dumps(title)}'
+        f"display notification {_applescript_string(one_line)} "
+        f"with title {_applescript_string(title)}"
     )
     try:
         result = subprocess.run(["osascript", "-e", script], timeout=15,
