@@ -182,6 +182,20 @@ Elke nieuwe match komt in `results/matches.csv`. Gemelde VIN's worden onthouden
 in `results/watch_state.json`, dus je krijgt een auto één keer te zien en niet
 elke drie uur opnieuw.
 
+De trekhaak wordt herkend aan optiecode `$TW01` in `OptionCodeList`, aan
+`ADL_OPTS = ['TOWING']`, of aan een `OptionCodeData`-regel met groep `TOWING`.
+Let op: élke Model Y heeft daarnaast een specificatieregel `SPECS_TOWING` met
+waarde `<nil>` — dat is géén trekhaak.
+
+### Melding testen
+
+```bash
+uv run python -m tesla_mcp.watch --test-notify
+```
+
+Komt de macOS-melding niet door, geef je terminal dan toestemming onder
+Systeeminstellingen › Berichtgeving.
+
 ### Het trekhaakfilter ijken
 
 Of Tesla de trekhaak in het veld `TOWING` zet of in een optiecode verschilt per

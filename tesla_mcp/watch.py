@@ -34,10 +34,12 @@ RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 STATE_FILE = RESULTS_DIR / "watch_state.json"
 MATCHES_CSV = RESULTS_DIR / "matches.csv"
 
-# Option groups Tesla returns in upper case (PAINT, WHEELS, TOWING, ...). The
-# tow hitch shows up in one of these, or in the raw option-code list.
+# Option groups Tesla returns in upper case (PAINT, WHEELS, ADL_OPTS, ...),
+# plus the raw option-code fields.
 _OPTION_CODE_KEYS = ("OptionCodeList", "OptionCodeSpecs", "OptionCodeData")
-_TOW_MARKERS = ("TOW", "TRAILER", "HITCH", "TW01", "TW02")
+
+# Tesla's option code for the tow hitch ("Trekhaak", group TOWING).
+_TOW_OPTION_CODES = {"$TW01", "$TW02", "TW01", "TW02"}
 
 
 def _env(key: str, fallback: str = "") -> str:
@@ -121,22 +123,35 @@ def paint_values(vehicle: dict) -> list[str]:
     return [p.upper() for p in _as_strings(vehicle.get("PAINT"))]
 
 
-def option_blob(vehicle: dict) -> str:
-    """All option-ish values as one upper-case string.
-
-    Only option groups (Tesla returns those with upper-case keys) and the raw
-    option-code fields — never free text like City, which could contain "tow"
-    by accident.
-    """
-    parts: list[str] = []
-    for key, value in vehicle.items():
-        if key.isupper() or key in _OPTION_CODE_KEYS:
-            parts.extend(_as_strings(value))
-    return " ".join(parts).upper()
-
-
 def has_tow_hitch(vehicle: dict) -> bool:
-    return any(marker in option_blob(vehicle) for marker in _TOW_MARKERS)
+    """True only when a tow hitch is actually fitted.
+
+    Three signals, all taken from live NL data:
+
+      * OptionCodeList contains $TW01 — the fitted-options list, authoritative
+      * ADL_OPTS holds "TOWING"
+      * OptionCodeData has an entry in group TOWING (code $TW01, "Trekhaak")
+
+    Deliberately exact: every Model Y also carries a *specification* row with
+    group SPECS_TOWING and value "<nil>". Matching the word "TOW" anywhere
+    therefore marks every car as having a hitch.
+    """
+    codes = {c.strip().upper() for c in _as_strings(vehicle.get("OptionCodeList"))
+             for c in c.split(",")}
+    if codes & _TOW_OPTION_CODES:
+        return True
+
+    if any(value.upper() == "TOWING" for value in _as_strings(vehicle.get("ADL_OPTS"))):
+        return True
+
+    if _as_strings(vehicle.get("TOWING")):
+        return True
+
+    for entry in vehicle.get("OptionCodeData") or []:
+        if isinstance(entry, dict) and str(entry.get("group", "")).upper() == "TOWING":
+            return True
+
+    return False
 
 
 def reject_reason(vehicle: dict, criteria: Criteria) -> str | None:
@@ -195,16 +210,26 @@ def summarize(vehicle: dict, criteria: Criteria) -> str:
 def notify_macos(title: str, body: str) -> bool:
     if platform.system() != "Darwin":
         return False
+    # Notifications carry a single line; osascript renders newlines poorly.
+    one_line = body.replace("\n", " · ")
     script = (
-        f'display notification {json.dumps(body)} '
-        f'with title {json.dumps(title)} sound name "Glass"'
+        f'display notification {json.dumps(one_line)} '
+        f'with title {json.dumps(title)}'
     )
     try:
-        subprocess.run(["osascript", "-e", script], check=True, timeout=15,
-                       capture_output=True)
-        return True
-    except (OSError, subprocess.SubprocessError):
+        result = subprocess.run(["osascript", "-e", script], timeout=15,
+                                capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"macOS-melding mislukt: {exc}", file=sys.stderr)
         return False
+
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip() or f"exitcode {result.returncode}"
+        print(f"macOS-melding mislukt: {detail}", file=sys.stderr)
+        print("  → geef je terminal toestemming onder Systeeminstellingen › "
+              "Berichtgeving", file=sys.stderr)
+        return False
+    return True
 
 
 def notify_ntfy(topic: str, title: str, body: str, click: str = "") -> bool:
@@ -377,9 +402,22 @@ def main(argv: list[str] | None = None) -> int:
                         help="toon de optievelden van de eerste auto's")
     parser.add_argument("--from-file", metavar="PATH",
                         help="lees voertuigen uit een eerder opgeslagen JSON-bestand")
+    parser.add_argument("--test-notify", action="store_true",
+                        help="stuur een testmelding en stop")
     args = parser.parse_args(argv)
 
     criteria = Criteria.from_env()
+
+    if args.test_notify:
+        ok_mac = notify_macos("Tesla-wachter", "Testmelding — dit werkt.")
+        print(f"macOS-melding: {'verstuurd' if ok_mac else 'MISLUKT'}")
+        topic = _env("NTFY_TOPIC")
+        if topic:
+            ok_push = notify_ntfy(topic, "Tesla-wachter", "Testmelding — dit werkt.")
+            print(f"Push naar {topic!r}: {'verstuurd' if ok_push else 'MISLUKT'}")
+        else:
+            print("NTFY_TOPIC niet gezet — geen push getest")
+        return 0
 
     if args.from_file:
         data = json.loads(Path(args.from_file).read_text())

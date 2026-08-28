@@ -261,6 +261,44 @@ def test_tow_detection_ignores_free_text() -> None:
     assert has_tow_hitch({"TOWING": ["TW01"], "City": "Utrecht"})
 
 
+def test_tow_detection_on_real_nl_records() -> None:
+    """Shapes taken verbatim from live tesla.com/nl_NL Model Y records.
+
+    Every car carries a SPECS_TOWING *specification* row with value "<nil>";
+    only $TW01 / ADL_OPTS TOWING / an OptionCodeData group of TOWING mean a
+    hitch is actually fitted. Matching "TOW" loosely passed every car.
+    """
+    from tesla_mcp.watch import has_tow_hitch
+
+    specs_row = {"code": "$MTY13", "group": "SPECS_TOWING", "value": "<nil>"}
+
+    fitted = {
+        "VIN": "LRWYGCFS2PC617284",
+        "ADL_OPTS": ["TOWING"],
+        "OptionCodeList": "$APBS,$DV2W,$INPW0,$PPSW,$MTY13,$CPF0,$TW01",
+        "OptionCodeData": [specs_row,
+                           {"code": "$TW01", "group": "TOWING", "name": "Trekhaak"}],
+    }
+    not_fitted = {
+        "VIN": "LRWYGCFS4PC674232",
+        "ADL_OPTS": None,
+        "OptionCodeList": "$APFS,$DV2W,$INPB0,$PMNG,$MTY13,$STY5S,$CPF0",
+        "OptionCodeData": [specs_row],
+    }
+
+    assert has_tow_hitch(fitted)
+    assert not has_tow_hitch(not_fitted), "SPECS_TOWING is geen trekhaak"
+
+    # And the filter as a whole agrees.
+    from tesla_mcp.watch import Criteria, reject_reason
+
+    criteria = Criteria()
+    fitted_2023 = {**fitted, "Year": 2023, "PAINT": ["BLUE"]}
+    plain_2023 = {**not_fitted, "Year": 2023, "PAINT": ["GREY"]}
+    assert reject_reason(fitted_2023, criteria) is None
+    assert reject_reason(plain_2023, criteria) == "geen trekhaak"
+
+
 def test_watch_price_and_odometer_limits() -> None:
     from tesla_mcp.watch import Criteria, reject_reason
 
