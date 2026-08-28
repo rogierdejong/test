@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tesla-inventory": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory", ".",
+        "python", "-m", "tesla_mcp.server"
+      ]
+    }
+  }
+}
