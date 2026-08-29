@@ -373,6 +373,40 @@ def test_first_run_seeds_instead_of_flooding() -> None:
          w.RESULTS_DIR, w.announce) = saved
 
 
+def test_alert_carries_a_link_per_car() -> None:
+    """Every car in an alert is one tap away from its listing."""
+    from tesla_mcp import watch as w
+
+    criteria = w.Criteria()
+    new = [{"VIN": "LRWY9", "Year": 2021, "Model": "my", "PAINT": ["PEARLWHITE"],
+            "TotalPrice": 27500, "City": "Zwolle"}]
+    matches = [{"VIN": "LRWYGCFS1PC577098", "Year": 2023, "Model": "my",
+                "PAINT": ["BLUE"], "TotalPrice": 33300, "City": "Den Haag",
+                "OptionCodeList": "$TW01"}]
+
+    _, body = w.compose(new, matches, criteria, total=22, first_run=False)
+
+    assert "https://www.tesla.com/nl_NL/my/order/LRWY9?redirect=no" in body
+    assert "https://www.tesla.com/nl_NL/my/order/LRWYGCFS1PC577098?redirect=no" in body
+
+
+def test_ntfy_actions_are_header_safe() -> None:
+    """The Actions header splits on comma and semicolon — labels must not."""
+    from tesla_mcp import watch as w
+
+    cars = [{"VIN": f"VIN{i}", "Year": 2023, "Model": "my", "PAINT": ["MIDNIGHT, SILVER"],
+             "TotalPrice": 33300 + i} for i in range(5)]
+    header = w.ntfy_actions(cars, w.Criteria())
+
+    parts = header.split("; ")
+    assert len(parts) == 3, "hoogstens drie knoppen"
+    for part in parts:
+        fields = part.split(", ")
+        assert len(fields) == 3, f"drie velden verwacht in {part!r}"
+        assert fields[0] == "view"
+        assert fields[2].startswith("https://www.tesla.com/")
+
+
 def test_watch_price_and_odometer_limits() -> None:
     from tesla_mcp.watch import Criteria, reject_reason
 

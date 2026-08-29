@@ -191,6 +191,15 @@ De eerste run legt de bestaande voorraad vast en meldt alleen dat hij begonnen
 is — anders zou je meteen twintig meldingen krijgen. Daarna hoor je alleen van
 wat er bijkomt.
 
+Onder elke auto in de melding staat een link naar de advertentie, en de push
+krijgt daarnaast knoppen voor de eerste drie auto's. De melding als geheel opent
+de goedkoopste auto die aan je eisen voldoet.
+
+Op de Mac kan een melding zelf geen link dragen. Installeer je
+`terminal-notifier` (`brew install terminal-notifier`), dan wordt de melding
+klikbaar en opent hij de advertentie; anders blijft het bij de tekst, met de
+links in de terminal en in het overzichtsbestand.
+
 Het volledige lijstje dat aan je eisen voldoet staat na elke run in
 `results/overzicht.txt` (de melding zelf toont de eerste vijf). Nieuwe treffers
 komen in `results/matches.csv`, en gemelde VIN's worden onthouden in

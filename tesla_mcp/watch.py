@@ -24,6 +24,7 @@ import csv
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -195,11 +196,15 @@ def reject_reason(vehicle: dict, criteria: Criteria) -> str | None:
 
 
 def listing_url(vehicle: dict, criteria: Criteria) -> str:
-    """Best-effort deep link to the listing on the localised site."""
+    """Deep link to this car's listing on the localised site.
+
+    redirect=no keeps Tesla on the inventory listing instead of bouncing to a
+    fresh configurator when the car is gone.
+    """
     vin = vehicle.get("VIN", "")
     model = (vehicle.get("Model") or criteria.model or "my").lower()
     prefix = f"/{REGION.locale}" if REGION.locale else ""
-    return f"https://www.tesla.com{prefix}/{model}/order/{vin}"
+    return f"https://www.tesla.com{prefix}/{model}/order/{vin}?redirect=no"
 
 
 def summarize(vehicle: dict, criteria: Criteria) -> str:
@@ -229,9 +234,24 @@ def _applescript_string(text: str) -> str:
     return f'"{escaped}"'
 
 
-def notify_macos(title: str, body: str) -> bool:
+def notify_macos(title: str, body: str, url: str = "") -> bool:
     if platform.system() != "Darwin":
         return False
+
+    # A notification posted by osascript cannot carry a link. terminal-notifier
+    # can, so when it is installed the notification itself opens the listing.
+    notifier = shutil.which("terminal-notifier")
+    if notifier and url:
+        try:
+            result = subprocess.run(
+                [notifier, "-title", title, "-message", body.replace("\n", " · "),
+                 "-open", url],
+                timeout=15, capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass  # val terug op osascript
     # Notifications carry a single line; osascript renders newlines poorly.
     one_line = body.replace("\n", " · ")
     script = (
@@ -254,7 +274,8 @@ def notify_macos(title: str, body: str) -> bool:
     return True
 
 
-def notify_ntfy(topic: str, title: str, body: str, click: str = "") -> bool:
+def notify_ntfy(topic: str, title: str, body: str, click: str = "",
+                actions: str = "") -> bool:
     """Push to a phone via ntfy.sh.
 
     The topic name is the only secret: anyone who knows it can read these
@@ -264,11 +285,13 @@ def notify_ntfy(topic: str, title: str, body: str, click: str = "") -> bool:
         return False
     url = topic if topic.startswith("http") else f"https://ntfy.sh/{topic}"
     request = urllib.request.Request(url, data=body.encode("utf-8"), method="POST")
-    request.add_header("Title", title.encode("utf-8").decode("latin-1", "replace"))
+    request.add_header("Title", _header_value(title))
     request.add_header("Tags", "car")
     request.add_header("Priority", "default")
     if click:
         request.add_header("Click", click)
+    if actions:
+        request.add_header("Actions", _header_value(actions))
     try:
         with urllib.request.urlopen(request, timeout=20) as resp:
             return 200 <= resp.status < 300
@@ -277,11 +300,46 @@ def notify_ntfy(topic: str, title: str, body: str, click: str = "") -> bool:
         return False
 
 
-def _lines(vehicles: list[dict], criteria: Criteria, limit: int = 5) -> str:
-    shown = [f"• {summarize(v, criteria)}" for v in vehicles[:limit]]
+def _lines(vehicles: list[dict], criteria: Criteria, limit: int = 5,
+           with_links: bool = True) -> str:
+    shown: list[str] = []
+    for v in vehicles[:limit]:
+        shown.append(f"• {summarize(v, criteria)}")
+        if with_links and v.get("VIN"):
+            shown.append(f"  {listing_url(v, criteria)}")
     if len(vehicles) > limit:
         shown.append(f"… en {len(vehicles) - limit} meer")
     return "\n".join(shown)
+
+
+def _header_value(text: str) -> str:
+    """Send UTF-8 through an HTTP header.
+
+    urllib encodes header strings as latin-1, so hand it the UTF-8 bytes
+    reinterpreted as latin-1: what goes over the wire is then correct UTF-8,
+    which is what ntfy expects.
+    """
+    return text.encode("utf-8").decode("latin-1", "replace")
+
+
+def ntfy_actions(vehicles: list[dict], criteria: Criteria, limit: int = 3) -> str:
+    """Tap-through buttons for the top cars, as ntfy's Actions header.
+
+    Labels stay free of commas and semicolons — those separate the fields of
+    that header.
+    """
+    actions = []
+    for v in vehicles[:limit]:
+        if not v.get("VIN"):
+            continue
+        paint = (paint_values(v) or ["?"])[0].title()
+        price = v.get("TotalPrice") or v.get("Price") or 0
+        label = f"{v.get('Year', '')} {paint}".strip()
+        if price:
+            label += f" {price // 1000}k"
+        label = label.replace(",", " ").replace(";", " ")
+        actions.append(f"view, {label}, {listing_url(v, criteria)}")
+    return "; ".join(actions)
 
 
 def compose(new: list[dict], matches: list[dict], criteria: Criteria,
@@ -315,16 +373,18 @@ def announce(new: list[dict], matches: list[dict], criteria: Criteria,
         print(f"\n[dry-run] melding: {title}\n{body}")
         return
 
-    if not notify_macos(title, body):
+    # Klik gaat naar de goedkoopste auto die aan je eisen voldoet, anders naar
+    # de eerste nieuwe; de knoppen dekken de eerste drie.
+    highlight = matches or new
+    click = listing_url(highlight[0], criteria) if highlight else ""
+
+    if not notify_macos(title, body, click):
         print("(geen macOS-melding verstuurd)", file=sys.stderr)
 
     topic = _env("NTFY_TOPIC")
     if topic:
-        # Klik gaat naar de goedkoopste auto die aan je eisen voldoet, anders
-        # naar de eerste nieuwe.
-        target = (matches or new or [None])[0]
-        click = listing_url(target, criteria) if target else ""
-        if notify_ntfy(topic, title, body, click):
+        actions = ntfy_actions(highlight, criteria)
+        if notify_ntfy(topic, title, body, click, actions):
             print(f"Push verstuurd naar ntfy topic {topic!r}")
     else:
         print("NTFY_TOPIC niet gezet — geen push naar je telefoon", file=sys.stderr)
@@ -444,6 +504,7 @@ def run(vehicles: list[dict], criteria: Criteria, dry_run: bool) -> int:
     if not first_run:
         for v in new:
             print(f"  • {summarize(v, criteria)}")
+            print(f"    {listing_url(v, criteria)}")
     for v in matches:
         marker = "NIEUW " if any(v is n for n in new) and not first_run else ""
         print(f"  ✓ {marker}{summarize(v, criteria)}")
@@ -487,11 +548,16 @@ def main(argv: list[str] | None = None) -> int:
     criteria = Criteria.from_env()
 
     if args.test_notify:
-        ok_mac = notify_macos("Tesla-wachter", "Testmelding — dit werkt.")
+        demo_url = f"https://www.tesla.com/{REGION.locale}/inventory/used/my"
+        ok_mac = notify_macos("Tesla-wachter", "Testmelding — dit werkt.", demo_url)
         print(f"macOS-melding: {'verstuurd' if ok_mac else 'MISLUKT'}")
         topic = _env("NTFY_TOPIC")
         if topic:
-            ok_push = notify_ntfy(topic, "Tesla-wachter", "Testmelding — dit werkt.")
+            ok_push = notify_ntfy(
+                topic, "Tesla-wachter",
+                f"Testmelding — dit werkt.\n{demo_url}", demo_url,
+                f"view, Voorraad bekijken, {demo_url}",
+            )
             print(f"Push naar {topic!r}: {'verstuurd' if ok_push else 'MISLUKT'}")
         else:
             print("NTFY_TOPIC niet gezet — geen push getest")
