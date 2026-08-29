@@ -212,8 +212,10 @@ Y) and alerts on anything new in it, whatever its specs — each alert carrying
 the current list of cars that meet your own criteria (by default a 2023 Model Y
 with a tow hitch, any colour but white) — a macOS notification, and a phone push via
 ntfy.sh when `NTFY_TOPIC` is set (`./setup-ntfy.sh <topic>` configures and
-tests that in one go). `./install-watch.sh` schedules it through
-launchd. See [`INSTALLATIE.md`](INSTALLATIE.md) for the details.
+tests that in one go). It also reports price
+changes on cars meeting those criteria, and logs every event — new listing,
+price change, disappearance — to `results/historie.csv` for later analysis.
+`./install-watch.sh` schedules it through launchd. See [`INSTALLATIE.md`](INSTALLATIE.md) for the details.
 
 ## Tech Stack
 

@@ -160,9 +160,11 @@ ORDER  BY scraped_at;
 De wachter werkt in twee lagen:
 
 1. **Wat hij volgt** — standaard alle Model Y-occasions in Nederland. Komt daar
-   een auto bij, dan krijg je bericht, **ongeacht de specs**.
+   een auto bij, dan krijg je bericht, **ongeacht de specs**. Verandert de prijs
+   van een auto die aan jouw eisen voldoet, dan ook.
 2. **Jouw eisen** — standaard bouwjaar 2023, met trekhaak, elke kleur behalve
-   wit. Élke melding bevat het actuele lijstje auto's dat daaraan voldoet.
+   wit. Nieuwe auto's die daar meteen aan voldoen krijgen een ★, en élke melding
+   sluit af met het actuele lijstje dat eraan voldoet.
 
 Zo mis je geen enkele nieuwe advertentie, en zie je in één oogopslag wat er op
 dat moment interessant voor je is.
@@ -185,7 +187,32 @@ Nieuw     : 1
   ✓ 2023 Achterwielaandrijving — €33.300, 44.349 km, BLUE, Den Haag
 ```
 
-Regels met `•` zijn nieuw in de voorraad, regels met `✓` voldoen aan je eisen.
+Regels met `•` zijn nieuw in de voorraad (een ★ betekent: voldoet meteen aan je
+eisen), `▼`/`▲` is een prijswijziging, en `✓` is het actuele lijstje dat aan je
+eisen voldoet.
+
+### Historie voor analyses
+
+Elke gebeurtenis komt in `results/historie.csv`, één regel per gebeurtenis:
+
+| event | wanneer |
+|-------|---------|
+| `nieuw` | auto verschijnt in de voorraad |
+| `prijswijziging` | prijs veranderd, met `vorige_prijs` en `verschil` |
+| `verkocht` | auto is uit de voorraad verdwenen |
+
+Met kolommen `datum`, `VIN`, `jaar`, `model`, `uitvoering`, `prijs`, `km`,
+`kleur`, `plaats`, `voldoet_aan_eisen`, `eerst_gezien`, `dagen_in_voorraad` en
+`url`. Genoeg om later te kijken hoe snel auto's weggaan, hoeveel er van de
+vraagprijs af gaat, of hoe het aanbod zich over de maanden ontwikkelt.
+
+Prijswijzigingen van álle auto's komen in de historie; een melding krijg je
+alleen voor auto's die aan je eisen voldoen.
+
+Eén voorbehoud bij `verkocht`: dat wordt afgeleid uit het verdwijnen uit de
+voorraad. Raakt een ophaalronde de paginalimiet (`WATCH_TOP_N`, standaard 200),
+dan kan een auto uit beeld vallen zonder verkocht te zijn — in dat geval slaat
+de wachter die conclusie over en zegt dat ook.
 
 De eerste run legt de bestaande voorraad vast en meldt alleen dat hij begonnen
 is — anders zou je meteen twintig meldingen krijgen. Daarna hoor je alleen van
