@@ -24,12 +24,14 @@ import csv
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from tesla_mcp.config import REGION
@@ -39,10 +41,19 @@ RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 STATE_FILE = RESULTS_DIR / "watch_state.json"
 MATCHES_CSV = RESULTS_DIR / "matches.csv"
 OVERVIEW_FILE = RESULTS_DIR / "overzicht.txt"
+HISTORY_CSV = RESULTS_DIR / "historie.csv"
 
-# Bumped when the meaning of the state file changes: v1 only tracked cars that
-# met the criteria, v2 tracks the whole scope so anything new can be reported.
-_STATE_VERSION = 2
+# v1 tracked only cars meeting the criteria; v2 the whole scope, so anything
+# new could be reported; v3 keeps a snapshot per car so a disappearance can be
+# logged as sold with its last known price.
+_STATE_VERSION = 3
+
+# One row per event, for later analysis in a spreadsheet.
+_HISTORY_FIELDS = [
+    "datum", "event", "VIN", "jaar", "model", "uitvoering",
+    "prijs", "vorige_prijs", "verschil", "km", "kleur", "plaats",
+    "voldoet_aan_eisen", "eerst_gezien", "dagen_in_voorraad", "url",
+]
 
 # Option groups Tesla returns in upper case (PAINT, WHEELS, ADL_OPTS, ...),
 # plus the raw option-code fields.
@@ -195,11 +206,15 @@ def reject_reason(vehicle: dict, criteria: Criteria) -> str | None:
 
 
 def listing_url(vehicle: dict, criteria: Criteria) -> str:
-    """Best-effort deep link to the listing on the localised site."""
+    """Deep link to this car's listing on the localised site.
+
+    redirect=no keeps Tesla on the inventory listing instead of bouncing to a
+    fresh configurator when the car is gone.
+    """
     vin = vehicle.get("VIN", "")
     model = (vehicle.get("Model") or criteria.model or "my").lower()
     prefix = f"/{REGION.locale}" if REGION.locale else ""
-    return f"https://www.tesla.com{prefix}/{model}/order/{vin}"
+    return f"https://www.tesla.com{prefix}/{model}/order/{vin}?redirect=no"
 
 
 def summarize(vehicle: dict, criteria: Criteria) -> str:
@@ -229,9 +244,24 @@ def _applescript_string(text: str) -> str:
     return f'"{escaped}"'
 
 
-def notify_macos(title: str, body: str) -> bool:
+def notify_macos(title: str, body: str, url: str = "") -> bool:
     if platform.system() != "Darwin":
         return False
+
+    # A notification posted by osascript cannot carry a link. terminal-notifier
+    # can, so when it is installed the notification itself opens the listing.
+    notifier = shutil.which("terminal-notifier")
+    if notifier and url:
+        try:
+            result = subprocess.run(
+                [notifier, "-title", title, "-message", body.replace("\n", " · "),
+                 "-open", url],
+                timeout=15, capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass  # val terug op osascript
     # Notifications carry a single line; osascript renders newlines poorly.
     one_line = body.replace("\n", " · ")
     script = (
@@ -254,7 +284,8 @@ def notify_macos(title: str, body: str) -> bool:
     return True
 
 
-def notify_ntfy(topic: str, title: str, body: str, click: str = "") -> bool:
+def notify_ntfy(topic: str, title: str, body: str, click: str = "",
+                actions: str = "") -> bool:
     """Push to a phone via ntfy.sh.
 
     The topic name is the only secret: anyone who knows it can read these
@@ -264,11 +295,13 @@ def notify_ntfy(topic: str, title: str, body: str, click: str = "") -> bool:
         return False
     url = topic if topic.startswith("http") else f"https://ntfy.sh/{topic}"
     request = urllib.request.Request(url, data=body.encode("utf-8"), method="POST")
-    request.add_header("Title", title.encode("utf-8").decode("latin-1", "replace"))
+    request.add_header("Title", _header_value(title))
     request.add_header("Tags", "car")
     request.add_header("Priority", "default")
     if click:
         request.add_header("Click", click)
+    if actions:
+        request.add_header("Actions", _header_value(actions))
     try:
         with urllib.request.urlopen(request, timeout=20) as resp:
             return 200 <= resp.status < 300
@@ -277,54 +310,141 @@ def notify_ntfy(topic: str, title: str, body: str, click: str = "") -> bool:
         return False
 
 
-def _lines(vehicles: list[dict], criteria: Criteria, limit: int = 5) -> str:
-    shown = [f"• {summarize(v, criteria)}" for v in vehicles[:limit]]
+def _lines(vehicles: list[dict], criteria: Criteria, limit: int = 5,
+           with_links: bool = True) -> str:
+    shown: list[str] = []
+    for v in vehicles[:limit]:
+        shown.append(f"• {summarize(v, criteria)}")
+        if with_links and v.get("VIN"):
+            shown.append(f"  {listing_url(v, criteria)}")
     if len(vehicles) > limit:
         shown.append(f"… en {len(vehicles) - limit} meer")
     return "\n".join(shown)
 
 
+def _header_value(text: str) -> str:
+    """Send UTF-8 through an HTTP header.
+
+    urllib encodes header strings as latin-1, so hand it the UTF-8 bytes
+    reinterpreted as latin-1: what goes over the wire is then correct UTF-8,
+    which is what ntfy expects.
+    """
+    return text.encode("utf-8").decode("latin-1", "replace")
+
+
+def ntfy_actions(vehicles: list[dict], criteria: Criteria, limit: int = 3) -> str:
+    """Tap-through buttons for the top cars, as ntfy's Actions header.
+
+    Labels stay free of commas and semicolons — those separate the fields of
+    that header.
+    """
+    actions = []
+    for v in vehicles[:limit]:
+        if not v.get("VIN"):
+            continue
+        paint = (paint_values(v) or ["?"])[0].title()
+        price = v.get("TotalPrice") or v.get("Price") or 0
+        label = f"{v.get('Year', '')} {paint}".strip()
+        if price:
+            label += f" {price // 1000}k"
+        label = label.replace(",", " ").replace(";", " ")
+        actions.append(f"view, {label}, {listing_url(v, criteria)}")
+    return "; ".join(actions)
+
+
+def _lines_marked(vehicles: list[dict], matches: list[dict], criteria: Criteria,
+                  limit: int = 5) -> str:
+    """New cars, with a star on the ones that already meet the criteria."""
+    match_vins = {m.get("VIN") for m in matches}
+    shown: list[str] = []
+    for v in vehicles[:limit]:
+        star = "★ " if v.get("VIN") in match_vins else ""
+        shown.append(f"• {star}{summarize(v, criteria)}")
+        if v.get("VIN"):
+            shown.append(f"  {listing_url(v, criteria)}")
+    if len(vehicles) > limit:
+        shown.append(f"… en {len(vehicles) - limit} meer")
+    return "\n".join(shown)
+
+
+def _price_lines(changes: list[tuple], criteria: Criteria, limit: int = 5) -> str:
+    shown: list[str] = []
+    for vehicle, old_price, new_price in changes[:limit]:
+        delta = new_price - old_price
+        arrow = "▼" if delta < 0 else "▲"
+        old_text = f"€{old_price:,.0f}".replace(",", ".")
+        delta_text = f"€{abs(delta):,.0f}".replace(",", ".")
+        shown.append(f"• {arrow} {delta_text} (was {old_text}) — "
+                     f"{summarize(vehicle, criteria)}")
+        if vehicle.get("VIN"):
+            shown.append(f"  {listing_url(vehicle, criteria)}")
+    if len(changes) > limit:
+        shown.append(f"… en {len(changes) - limit} meer")
+    return "\n".join(shown)
+
+
 def compose(new: list[dict], matches: list[dict], criteria: Criteria,
-            total: int, first_run: bool) -> tuple[str, str]:
-    """Title and body for one alert."""
+            total: int, first_run: bool = False,
+            price_changes: list[tuple] | None = None) -> tuple[str, str]:
+    """Title and body for one alert.
+
+    Everything new leads; what meets the criteria follows as the highlight.
+    """
+    price_changes = price_changes or []
+
     if first_run:
         title = f"Wachter gestart — {total} auto's in beeld"
-        opening = (f"{total} auto's in de voorraad. Vanaf nu krijg je bericht "
-                   "zodra er eentje bijkomt.")
+        sections = [f"{total} auto's in de voorraad. Vanaf nu krijg je bericht "
+                    "zodra er eentje bijkomt of van prijs verandert."]
     else:
-        title = f"{len(new)} nieuw in de voorraad"
+        parts = []
+        if new:
+            parts.append(f"{len(new)} nieuw")
+        if price_changes:
+            parts.append(f"{len(price_changes)} prijswijziging"
+                         + ("" if len(price_changes) == 1 else "en"))
+        title = " · ".join(parts) or "Voorraad bijgewerkt"
         if matches:
-            title += f" — {len(matches)} voldoet aan je eisen" if len(matches) == 1 \
-                else f" — {len(matches)} voldoen aan je eisen"
-        opening = _lines(new, criteria)
+            title += (f" — {len(matches)} voldoet aan je eisen" if len(matches) == 1
+                      else f" — {len(matches)} voldoen aan je eisen")
+
+        sections = []
+        if new:
+            sections.append("Nieuw in de voorraad:\n"
+                            + _lines_marked(new, matches, criteria))
+        if price_changes:
+            sections.append("Prijs gewijzigd:\n" + _price_lines(price_changes, criteria))
 
     if matches:
-        body = (f"{opening}\n\n"
-                f"Voldoet aan je eisen ({criteria.describe()}):\n"
-                f"{_lines(matches, criteria)}")
+        sections.append(f"Voldoet aan je eisen ({criteria.describe()}):\n"
+                        + _lines(matches, criteria))
     else:
-        body = f"{opening}\n\nNiets in de voorraad dat aan je eisen voldoet."
-    return title, body
+        sections.append("Niets in de voorraad dat aan je eisen voldoet.")
+
+    return title, "\n\n".join(sections)
 
 
 def announce(new: list[dict], matches: list[dict], criteria: Criteria,
-             total: int, first_run: bool = False, dry_run: bool = False) -> None:
-    title, body = compose(new, matches, criteria, total, first_run)
+             total: int, first_run: bool = False, dry_run: bool = False,
+             price_changes: list[tuple] | None = None) -> None:
+    title, body = compose(new, matches, criteria, total, first_run, price_changes)
 
     if dry_run:
         print(f"\n[dry-run] melding: {title}\n{body}")
         return
 
-    if not notify_macos(title, body):
+    # Klik gaat naar de goedkoopste auto die aan je eisen voldoet, anders naar
+    # de eerste nieuwe; de knoppen dekken de eerste drie.
+    highlight = matches or new
+    click = listing_url(highlight[0], criteria) if highlight else ""
+
+    if not notify_macos(title, body, click):
         print("(geen macOS-melding verstuurd)", file=sys.stderr)
 
     topic = _env("NTFY_TOPIC")
     if topic:
-        # Klik gaat naar de goedkoopste auto die aan je eisen voldoet, anders
-        # naar de eerste nieuwe.
-        target = (matches or new or [None])[0]
-        click = listing_url(target, criteria) if target else ""
-        if notify_ntfy(topic, title, body, click):
+        actions = ntfy_actions(highlight, criteria)
+        if notify_ntfy(topic, title, body, click, actions):
             print(f"Push verstuurd naar ntfy topic {topic!r}")
     else:
         print("NTFY_TOPIC niet gezet — geen push naar je telefoon", file=sys.stderr)
@@ -370,6 +490,56 @@ def record_matches(vehicles: list[dict], criteria: Criteria) -> None:
                 "City": v.get("City", ""),
                 "url": listing_url(v, criteria),
             })
+
+
+def snapshot(vehicle: dict, criteria: Criteria, matched: bool) -> dict:
+    """The few fields worth keeping after a car leaves the inventory."""
+    return {
+        "jaar": vehicle.get("Year"),
+        "model": (vehicle.get("Model") or criteria.model).lower(),
+        "uitvoering": vehicle.get("TrimName"),
+        "prijs": vehicle.get("TotalPrice") or vehicle.get("Price"),
+        "km": vehicle.get("Odometer"),
+        "kleur": ", ".join(paint_values(vehicle)),
+        "plaats": vehicle.get("City") or vehicle.get("MetroName"),
+        "url": listing_url(vehicle, criteria),
+        "voldoet_aan_eisen": "ja" if matched else "nee",
+    }
+
+
+def _history_row(event: str, vin: str, snap: dict, when: str,
+                 first_seen: str = "", previous_price=None) -> dict:
+    price = snap.get("prijs")
+    row = {f: "" for f in _HISTORY_FIELDS}
+    row.update({k: v for k, v in snap.items() if k in _HISTORY_FIELDS})
+    row.update({"datum": when, "event": event, "VIN": vin, "prijs": price or ""})
+
+    if previous_price is not None:
+        row["vorige_prijs"] = previous_price
+        if price:
+            row["verschil"] = price - previous_price
+
+    if first_seen:
+        row["eerst_gezien"] = first_seen
+        try:
+            start = datetime.strptime(first_seen[:10], "%Y-%m-%d")
+            row["dagen_in_voorraad"] = (datetime.strptime(when[:10], "%Y-%m-%d") - start).days
+        except ValueError:
+            pass
+    return row
+
+
+def append_history(rows: list[dict]) -> None:
+    """Append events to results/historie.csv — the file to run analyses on."""
+    if not rows:
+        return
+    RESULTS_DIR.mkdir(exist_ok=True)
+    exists = HISTORY_CSV.exists()
+    with HISTORY_CSV.open("a", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_HISTORY_FIELDS)
+        if not exists:
+            writer.writeheader()
+        writer.writerows(rows)
 
 
 def write_overview(matches: list[dict], criteria: Criteria, total: int) -> None:
@@ -424,15 +594,39 @@ def run(vehicles: list[dict], criteria: Criteria, dry_run: bool) -> int:
             matches.append(v)
         else:
             reasons[reason] = reasons.get(reason, 0) + 1
+    match_vins = {m.get("VIN") for m in matches}
 
     state = load_state()
     seen = state["seen"]
-    # A v1 state only held matching cars, so treating it as "already seen"
-    # would hide everything else forever; seed instead of flooding.
     first_run = state.get("version") != _STATE_VERSION or not seen
 
-    new = [v for v in vehicles if v.get("VIN") and v["VIN"] not in seen]
+    now = time.strftime("%Y-%m-%d %H:%M")
+    current = {v["VIN"]: v for v in vehicles if v.get("VIN")}
+    events: list[dict] = []
 
+    new = [v for vin, v in current.items() if vin not in seen]
+
+    # Price moves on cars we already knew.
+    price_changes: list[tuple] = []
+    for vin, v in current.items():
+        before = seen.get(vin)
+        if not before or before.get("status", "actief") != "actief":
+            continue
+        old_price, now_price = before.get("price"), v.get("TotalPrice") or v.get("Price")
+        if old_price and now_price and old_price != now_price:
+            price_changes.append((v, old_price, now_price))
+
+    # A car that vanished has been sold — but only trust that when neither this
+    # fetch nor the previous one hit the page cap. A capped fetch is a
+    # truncated list, so cars can drop out of view while still being for sale.
+    complete = len(vehicles) < criteria.top_n
+    trust_sold = complete and not state.get("last_fetch_capped", False)
+    sold: list[tuple[str, dict]] = []
+    if trust_sold and not first_run:
+        sold = [(vin, entry) for vin, entry in seen.items()
+                if entry.get("status", "actief") == "actief" and vin not in current]
+
+    # ── Console ──
     print(f"Voorraad  : {len(vehicles)} auto's ({criteria.model.upper()} "
           f"{criteria.condition})")
     print(f"Jouw eisen: {criteria.describe()}")
@@ -440,35 +634,71 @@ def run(vehicles: list[dict], criteria: Criteria, dry_run: bool) -> int:
     if reasons:
         print("Afgevallen: " + ", ".join(f"{n}x {r}" for r, n in sorted(reasons.items())))
     print(f"Nieuw     : {'eerste run — voorraad wordt vastgelegd' if first_run else len(new)}")
-
     if not first_run:
         for v in new:
-            print(f"  • {summarize(v, criteria)}")
-    for v in matches:
-        marker = "NIEUW " if any(v is n for n in new) and not first_run else ""
-        print(f"  ✓ {marker}{summarize(v, criteria)}")
-        print(f"    {listing_url(v, criteria)}")
+            star = "★ " if v.get("VIN") in match_vins else ""
+            print(f"  • {star}{summarize(v, criteria)}")
+            print(f"    {listing_url(v, criteria)}")
+        if price_changes:
+            print(f"Prijs     : {len(price_changes)} gewijzigd")
+            for v, old_price, now_price in price_changes:
+                arrow = "▼" if now_price < old_price else "▲"
+                print(f"  {arrow} {old_price} → {now_price}  {summarize(v, criteria)}")
+        if sold:
+            print(f"Verdwenen : {len(sold)} (als verkocht vastgelegd)")
+        elif not trust_sold:
+            print("Verdwenen : niet bepaald — de voorraad raakte de paginalimiet, "
+                  "dus een auto kan uit beeld vallen zonder verkocht te zijn")
 
-    now = time.strftime("%Y-%m-%d %H:%M")
-    for v in vehicles:
-        vin = v.get("VIN")
-        if vin:
-            seen[vin] = {"last_seen": now,
-                         "price": v.get("TotalPrice") or v.get("Price")}
+    # ── Historie ──
+    for v in new:
+        vin = v["VIN"]
+        snap = snapshot(v, criteria, vin in match_vins)
+        events.append(_history_row("nieuw", vin, snap, now))
+        seen[vin] = {"first_seen": now, "last_seen": now, "price": snap["prijs"],
+                     "status": "actief", "snapshot": snap}
+
+    for v, old_price, now_price in price_changes:
+        vin = v["VIN"]
+        snap = snapshot(v, criteria, vin in match_vins)
+        events.append(_history_row("prijswijziging", vin, snap, now,
+                                   first_seen=seen[vin].get("first_seen", ""),
+                                   previous_price=old_price))
+
+    for vin, entry in sold:
+        snap = entry.get("snapshot") or {"prijs": entry.get("price")}
+        events.append(_history_row("verkocht", vin, snap, now,
+                                   first_seen=entry.get("first_seen", "")))
+        entry["status"] = "verkocht"
+        entry["sold_on"] = now
+
+    # Cars still listed: refresh price and snapshot.
+    for vin, v in current.items():
+        snap = snapshot(v, criteria, vin in match_vins)
+        entry = seen.setdefault(vin, {"first_seen": now})
+        entry.update({"last_seen": now, "price": snap["prijs"],
+                      "status": "actief", "snapshot": snap})
     state["version"] = _STATE_VERSION
+    state["last_fetch_capped"] = not complete
 
     if not dry_run:
         write_overview(matches, criteria, len(vehicles))
-        record_matches([v for v in matches if v in new] if not first_run else matches,
+        append_history(events)
+        record_matches(matches if first_run else [v for v in new if v in matches],
                        criteria)
         save_state(state)
         print(f"Overzicht : {OVERVIEW_FILE}")
+        if events:
+            print(f"Historie  : {len(events)} regel(s) bij in {HISTORY_CSV}")
 
-    if first_run or new:
-        announce(new, matches, criteria, total=len(vehicles),
-                 first_run=first_run, dry_run=dry_run)
+    # Price moves are only worth a push when they touch a car you want.
+    match_price_changes = [c for c in price_changes if c[0].get("VIN") in match_vins]
+
+    if first_run or new or match_price_changes:
+        announce(new, matches, criteria, total=len(vehicles), first_run=first_run,
+                 dry_run=dry_run, price_changes=match_price_changes)
     else:
-        print("Geen melding — er is niets bijgekomen.")
+        print("Geen melding — niets nieuws en geen prijswijziging binnen je eisen.")
     return 0
 
 
@@ -487,11 +717,16 @@ def main(argv: list[str] | None = None) -> int:
     criteria = Criteria.from_env()
 
     if args.test_notify:
-        ok_mac = notify_macos("Tesla-wachter", "Testmelding — dit werkt.")
+        demo_url = f"https://www.tesla.com/{REGION.locale}/inventory/used/my"
+        ok_mac = notify_macos("Tesla-wachter", "Testmelding — dit werkt.", demo_url)
         print(f"macOS-melding: {'verstuurd' if ok_mac else 'MISLUKT'}")
         topic = _env("NTFY_TOPIC")
         if topic:
-            ok_push = notify_ntfy(topic, "Tesla-wachter", "Testmelding — dit werkt.")
+            ok_push = notify_ntfy(
+                topic, "Tesla-wachter",
+                f"Testmelding — dit werkt.\n{demo_url}", demo_url,
+                f"view, Voorraad bekijken, {demo_url}",
+            )
             print(f"Push naar {topic!r}: {'verstuurd' if ok_push else 'MISLUKT'}")
         else:
             print("NTFY_TOPIC niet gezet — geen push getest")

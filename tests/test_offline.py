@@ -336,18 +336,40 @@ def test_alert_reports_everything_new_plus_current_matches() -> None:
     assert "Voldoet aan je eisen" in body and "Den Haag" in body
 
 
-def test_first_run_seeds_instead_of_flooding() -> None:
-    """Upgrading from the match-only state must not announce the whole market."""
+def _watch_sandbox():
+    """Point the watcher's files at a temp dir and capture its alerts."""
     import tempfile
     from tesla_mcp import watch as w
 
     tmp = Path(tempfile.mkdtemp())
-    sent: list[tuple] = []
-    saved = (w.STATE_FILE, w.MATCHES_CSV, w.OVERVIEW_FILE, w.RESULTS_DIR, w.announce)
+    sent: list[dict] = []
+    saved = (w.RESULTS_DIR, w.STATE_FILE, w.MATCHES_CSV, w.OVERVIEW_FILE,
+             w.HISTORY_CSV, w.announce)
     w.RESULTS_DIR, w.STATE_FILE = tmp, tmp / "state.json"
     w.MATCHES_CSV, w.OVERVIEW_FILE = tmp / "m.csv", tmp / "o.txt"
-    w.announce = lambda new, matches, criteria, total, first_run=False, dry_run=False: \
-        sent.append((len(new), len(matches), first_run))
+    w.HISTORY_CSV = tmp / "historie.csv"
+    w.announce = lambda new, matches, criteria, total, first_run=False, \
+        dry_run=False, price_changes=None: sent.append(
+            {"new": len(new), "matches": len(matches), "first_run": first_run,
+             "price_changes": len(price_changes or [])})
+
+    def restore():
+        (w.RESULTS_DIR, w.STATE_FILE, w.MATCHES_CSV, w.OVERVIEW_FILE,
+         w.HISTORY_CSV, w.announce) = saved
+
+    return w, tmp, sent, restore
+
+
+def _history(tmp: Path) -> list[dict]:
+    import csv as _csv
+
+    path = tmp / "historie.csv"
+    return list(_csv.DictReader(path.open())) if path.exists() else []
+
+
+def test_first_run_seeds_instead_of_flooding() -> None:
+    """Upgrading from the match-only state must not announce the whole market."""
+    w, tmp, sent, restore = _watch_sandbox()
 
     vehicles = [
         {"VIN": "A", "Year": 2023, "PAINT": ["BLUE"], "OptionCodeList": "$TW01"},
@@ -356,9 +378,10 @@ def test_first_run_seeds_instead_of_flooding() -> None:
     try:
         w.run(vehicles, w.Criteria(), dry_run=False)
         state = json.loads((tmp / "state.json").read_text())
-        assert state["version"] == 2
+        assert state["version"] == 3
         assert set(state["seen"]) == {"A", "B"}, "hele scope wordt vastgelegd"
-        assert sent == [(2, 1, True)], "één startmelding, geen vloedgolf"
+        assert sent == [{"new": 2, "matches": 1, "first_run": True,
+                         "price_changes": 0}], "één startmelding, geen vloedgolf"
 
         # Niets veranderd → geen tweede melding.
         w.run(vehicles, w.Criteria(), dry_run=False)
@@ -367,10 +390,109 @@ def test_first_run_seeds_instead_of_flooding() -> None:
         # Eén nieuwe die niet aan de eisen voldoet → tóch een melding.
         w.run(vehicles + [{"VIN": "C", "Year": 2019, "PAINT": ["BLACK"]}],
               w.Criteria(), dry_run=False)
-        assert sent[-1] == (1, 1, False)
+        assert sent[-1] == {"new": 1, "matches": 1, "first_run": False,
+                            "price_changes": 0}
     finally:
-        (w.STATE_FILE, w.MATCHES_CSV, w.OVERVIEW_FILE,
-         w.RESULTS_DIR, w.announce) = saved
+        restore()
+
+
+def test_alert_carries_a_link_per_car() -> None:
+    """Every car in an alert is one tap away from its listing."""
+    from tesla_mcp import watch as w
+
+    criteria = w.Criteria()
+    new = [{"VIN": "LRWY9", "Year": 2021, "Model": "my", "PAINT": ["PEARLWHITE"],
+            "TotalPrice": 27500, "City": "Zwolle"}]
+    matches = [{"VIN": "LRWYGCFS1PC577098", "Year": 2023, "Model": "my",
+                "PAINT": ["BLUE"], "TotalPrice": 33300, "City": "Den Haag",
+                "OptionCodeList": "$TW01"}]
+
+    _, body = w.compose(new, matches, criteria, total=22, first_run=False)
+
+    assert "https://www.tesla.com/nl_NL/my/order/LRWY9?redirect=no" in body
+    assert "https://www.tesla.com/nl_NL/my/order/LRWYGCFS1PC577098?redirect=no" in body
+
+
+def test_ntfy_actions_are_header_safe() -> None:
+    """The Actions header splits on comma and semicolon — labels must not."""
+    from tesla_mcp import watch as w
+
+    cars = [{"VIN": f"VIN{i}", "Year": 2023, "Model": "my", "PAINT": ["MIDNIGHT, SILVER"],
+             "TotalPrice": 33300 + i} for i in range(5)]
+    header = w.ntfy_actions(cars, w.Criteria())
+
+    parts = header.split("; ")
+    assert len(parts) == 3, "hoogstens drie knoppen"
+    for part in parts:
+        fields = part.split(", ")
+        assert len(fields) == 3, f"drie velden verwacht in {part!r}"
+        assert fields[0] == "view"
+        assert fields[2].startswith("https://www.tesla.com/")
+
+
+def test_price_change_alerts_only_for_matching_cars() -> None:
+    """A price move is worth waking you for only on a car you actually want."""
+    w, tmp, sent, restore = _watch_sandbox()
+
+    wanted = {"VIN": "A", "Year": 2023, "Model": "my", "PAINT": ["BLUE"],
+              "OptionCodeList": "$TW01", "TotalPrice": 34000}
+    other = {"VIN": "B", "Year": 2020, "Model": "my", "PAINT": ["BLACK"],
+             "TotalPrice": 25000}
+    try:
+        w.run([wanted, other], w.Criteria(), dry_run=False)          # eerste run
+        sent.clear()
+
+        w.run([{**wanted, "TotalPrice": 32500}, {**other, "TotalPrice": 24000}],
+              w.Criteria(), dry_run=False)
+
+        assert sent == [{"new": 0, "matches": 1, "first_run": False,
+                         "price_changes": 1}], "alleen de match wekt je"
+
+        rows = [r for r in _history(tmp) if r["event"] == "prijswijziging"]
+        vins = {r["VIN"]: r for r in rows}
+        assert set(vins) == {"A", "B"}, "beide wijzigingen wel in de historie"
+        assert vins["A"]["verschil"] == "-1500"
+        assert vins["B"]["voldoet_aan_eisen"] == "nee"
+    finally:
+        restore()
+
+
+def test_disappeared_car_is_logged_as_sold() -> None:
+    w, tmp, sent, restore = _watch_sandbox()
+
+    a = {"VIN": "A", "Year": 2023, "Model": "my", "PAINT": ["BLUE"],
+         "OptionCodeList": "$TW01", "TotalPrice": 34000}
+    b = {"VIN": "B", "Year": 2020, "Model": "my", "PAINT": ["BLACK"],
+         "TotalPrice": 25000}
+    try:
+        w.run([a, b], w.Criteria(), dry_run=False)
+        w.run([a], w.Criteria(), dry_run=False)
+
+        sold = [r for r in _history(tmp) if r["event"] == "verkocht"]
+        assert len(sold) == 1 and sold[0]["VIN"] == "B"
+        assert sold[0]["prijs"] == "25000", "laatst bekende prijs blijft bewaard"
+        assert sold[0]["datum"] and sold[0]["eerst_gezien"]
+
+        # Niet twee keer melden.
+        w.run([a], w.Criteria(), dry_run=False)
+        assert len([r for r in _history(tmp) if r["event"] == "verkocht"]) == 1
+    finally:
+        restore()
+
+
+def test_page_cap_does_not_fake_a_sale() -> None:
+    """Hitting the fetch limit means cars fall out of view, not out of stock."""
+    w, tmp, sent, restore = _watch_sandbox()
+
+    cars = [{"VIN": f"V{i}", "Year": 2020, "PAINT": ["BLACK"], "TotalPrice": 20000}
+            for i in range(3)]
+    small = w.Criteria(top_n=3)
+    try:
+        w.run(cars, small, dry_run=False)
+        w.run(cars[:2], small, dry_run=False)
+        assert not [r for r in _history(tmp) if r["event"] == "verkocht"]
+    finally:
+        restore()
 
 
 def test_watch_price_and_odometer_limits() -> None:
