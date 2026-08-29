@@ -341,6 +341,13 @@ class InventoryClient:
                     options=options,
                 )
             except Exception as exc:
+                if page_num == 0:
+                    # Niets opgehaald: dat is een fout, geen lege voorraad. Stil
+                    # een lege lijst teruggeven laat de aanroeper denken dat de
+                    # voorraad leeg is — met alle gevolgen van dien.
+                    raise RuntimeError(
+                        f"[{model}] eerste pagina mislukt: {exc}"
+                    ) from exc
                 _log(f"[{model}] fetch_top_n page {page_num} error: {exc} — returning {len(seen)} collected")
                 break
 

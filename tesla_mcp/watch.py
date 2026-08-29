@@ -562,17 +562,30 @@ def write_overview(matches: list[dict], criteria: Criteria, total: int) -> None:
 
 
 async def fetch_vehicles(criteria: Criteria) -> list[dict]:
-    """Fetch the whole scope — no year filter, so anything new is spotted."""
-    cookies = await CookieManager().acquire(
-        model=criteria.model, condition=criteria.condition
-    )
-    client = InventoryClient(cookies)
-    _, vehicles = client.fetch_top_n(
-        model=criteria.model,
-        condition=criteria.condition,
-        n=criteria.top_n,
-    )
-    return vehicles
+    """Fetch the whole scope — no year filter, so anything new is spotted.
+
+    Akamai answers a burst of requests with 403 or 429. Fresh cookies usually
+    settle it, so try that once before giving up.
+    """
+    manager = CookieManager()
+
+    async def _fetch() -> list[dict]:
+        cookies = await manager.acquire(model=criteria.model,
+                                        condition=criteria.condition)
+        client = InventoryClient(cookies)
+        _, vehicles = client.fetch_top_n(
+            model=criteria.model, condition=criteria.condition, n=criteria.top_n,
+        )
+        return vehicles
+
+    try:
+        return await _fetch()
+    except RuntimeError as exc:
+        print(f"Ophalen mislukt ({exc}); cookies verversen en één keer opnieuw...",
+              file=sys.stderr)
+        manager.invalidate()
+        await asyncio.sleep(5)
+        return await _fetch()
 
 
 def explain(vehicles: list[dict], limit: int = 3) -> None:
@@ -620,7 +633,14 @@ def run(vehicles: list[dict], criteria: Criteria, dry_run: bool) -> int:
     # fetch nor the previous one hit the page cap. A capped fetch is a
     # truncated list, so cars can drop out of view while still being for sale.
     complete = len(vehicles) < criteria.top_n
-    trust_sold = complete and not state.get("last_fetch_capped", False)
+    active_before = sum(1 for e in seen.values()
+                        if e.get("status", "actief") == "actief")
+    # Een lege of gehalveerde lijst betekent bijna altijd een geblokkeerde of
+    # afgebroken ophaalronde — niet dat de voorraad is leeggekocht.
+    plausible = bool(vehicles) and (
+        not active_before or len(current) >= active_before / 2
+    )
+    trust_sold = complete and plausible and not state.get("last_fetch_capped", False)
     sold: list[tuple[str, dict]] = []
     if trust_sold and not first_run:
         sold = [(vin, entry) for vin, entry in seen.items()
@@ -646,6 +666,10 @@ def run(vehicles: list[dict], criteria: Criteria, dry_run: bool) -> int:
                 print(f"  {arrow} {old_price} → {now_price}  {summarize(v, criteria)}")
         if sold:
             print(f"Verdwenen : {len(sold)} (als verkocht vastgelegd)")
+        elif not plausible:
+            print(f"Verdwenen : niet bepaald — {len(current)} auto's opgehaald "
+                  f"tegen {active_before} bekende; dat wijst op een mislukte "
+                  "ophaalronde, niet op verkoop")
         elif not trust_sold:
             print("Verdwenen : niet bepaald — de voorraad raakte de paginalimiet, "
                   "dus een auto kan uit beeld vallen zonder verkocht te zijn")

@@ -480,6 +480,56 @@ def test_disappeared_car_is_logged_as_sold() -> None:
         restore()
 
 
+def test_failed_fetch_is_not_an_empty_inventory() -> None:
+    """A blocked first page must raise, not look like an empty market.
+
+    Akamai answered a burst with 429; fetch_top_n swallowed it and returned an
+    empty list, and the watcher then logged every known car as sold.
+    """
+    class _Blocked:
+        status_code = 429
+        text = '{"cpr_chlge":"true"}'
+
+        def json(self):
+            return {}
+
+    saved = _FakeRequests.get
+    _FakeRequests.get = classmethod(lambda cls, url, **kw: _Blocked())
+    try:
+        client = scraper.InventoryClient({"_abck": "x"}, region=get_region("NL"))
+        try:
+            client.fetch_top_n(model="my", condition="used", n=30)
+        except RuntimeError as exc:
+            assert "429" in str(exc)
+        else:
+            raise AssertionError("een geblokkeerde eerste pagina moet opbreken")
+    finally:
+        _FakeRequests.get = saved
+
+
+def test_empty_or_halved_fetch_never_marks_cars_sold() -> None:
+    """The 429 case, one level up: no sold events from an implausible fetch."""
+    w, tmp, sent, restore = _watch_sandbox()
+
+    cars = [{"VIN": f"V{i}", "Year": 2023, "PAINT": ["BLUE"],
+             "OptionCodeList": "$TW01", "TotalPrice": 30000 + i}
+            for i in range(8)]
+    try:
+        w.run(cars, w.Criteria(), dry_run=False)
+
+        w.run([], w.Criteria(), dry_run=False)                 # niets opgehaald
+        assert not [r for r in _history(tmp) if r["event"] == "verkocht"]
+
+        w.run(cars[:3], w.Criteria(), dry_run=False)           # meer dan gehalveerd
+        assert not [r for r in _history(tmp) if r["event"] == "verkocht"]
+
+        w.run(cars[:6], w.Criteria(), dry_run=False)           # geloofwaardige daling
+        sold = [r for r in _history(tmp) if r["event"] == "verkocht"]
+        assert {r["VIN"] for r in sold} == {"V6", "V7"}
+    finally:
+        restore()
+
+
 def test_page_cap_does_not_fake_a_sale() -> None:
     """Hitting the fetch limit means cars fall out of view, not out of stock."""
     w, tmp, sent, restore = _watch_sandbox()

@@ -210,9 +210,17 @@ Prijswijzigingen van álle auto's komen in de historie; een melding krijg je
 alleen voor auto's die aan je eisen voldoen.
 
 Eén voorbehoud bij `verkocht`: dat wordt afgeleid uit het verdwijnen uit de
-voorraad. Raakt een ophaalronde de paginalimiet (`WATCH_TOP_N`, standaard 200),
-dan kan een auto uit beeld vallen zonder verkocht te zijn — in dat geval slaat
-de wachter die conclusie over en zegt dat ook.
+voorraad. De wachter trekt die conclusie alleen als de ophaalronde
+geloofwaardig is, en slaat hem over — met uitleg in de uitvoer — als:
+
+- de lijst leeg is of meer dan gehalveerd ten opzichte van de vorige ronde,
+  wat vrijwel altijd op een blokkade of afgebroken ronde wijst;
+- deze of de vorige ronde de paginalimiet raakte (`WATCH_TOP_N`, standaard
+  200), want dan is de lijst afgekapt.
+
+Blokkeert Tesla de aanroep met 403 of 429, dan ververst de wachter de cookies
+en probeert hij één keer opnieuw; lukt dat ook niet, dan stopt hij met een
+foutmelding zonder de historie aan te raken.
 
 De eerste run legt de bestaande voorraad vast en meldt alleen dat hij begonnen
 is — anders zou je meteen twintig meldingen krijgen. Daarna hoor je alleen van
