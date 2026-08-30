@@ -225,8 +225,10 @@ def summarize(vehicle: dict, criteria: Criteria) -> str:
     price_text = f"€{price:,.0f}".replace(",", ".") if price else "prijs onbekend"
     odo_text = f"{odo:,.0f}".replace(",", ".")
     trim = vehicle.get("TrimName") or criteria.model.upper()
-    return (f"{vehicle.get('Year', '?')} {trim} — {price_text}, "
+    line = (f"{vehicle.get('Year', '?')} {trim} — {price_text}, "
             f"{odo_text} km, {paint}, {city}")
+    vin = vehicle.get("VIN")
+    return f"{line} · {vin}" if vin else line
 
 
 # ── Notifications ─────────────────────────────────────────────────────
