@@ -411,6 +411,8 @@ def test_alert_carries_a_link_per_car() -> None:
 
     assert "https://www.tesla.com/nl_NL/my/order/LRWY9?redirect=no" in body
     assert "https://www.tesla.com/nl_NL/my/order/LRWYGCFS1PC577098?redirect=no" in body
+    # Het VIN staat er los bij, zodat je het kunt overnemen zonder de link te openen.
+    assert "· LRWYGCFS1PC577098" in body
 
 
 def test_ntfy_actions_are_header_safe() -> None:
