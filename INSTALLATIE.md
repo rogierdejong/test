@@ -209,6 +209,30 @@ vraagprijs af gaat, of hoe het aanbod zich over de maanden ontwikkelt.
 Prijswijzigingen van álle auto's komen in de historie; een melding krijg je
 alleen voor auto's die aan je eisen voldoen.
 
+### De historie analyseren
+
+```bash
+uv run python -m tesla_mcp.analyse
+uv run python -m tesla_mcp.analyse --dagen 14
+uv run python -m tesla_mcp.analyse --bestand ~/backup/historie.csv
+```
+
+Dat geeft, puur beschrijvend:
+
+- **wanneer** Tesla prijzen aanpast — wijzigingen naar tijdstip van de dag,
+  plus per ronde het gat ervoor. Veel wijzigingen na een kort nachtelijk gat en
+  geen na een lang gat overdag betekent dat er 's nachts in één keer wordt
+  herprijsd;
+- **hoe hard** ze bewegen — per dag het aantal aanpassingen, de mediaan, en de
+  verhouding omlaag/omhoog;
+- **prijs per type** — mediaan, spreiding en mediane kilometerstand per bouwjaar
+  en uitvoering, met vanaf vijf auto's een ruwe helling in euro per 10.000 km;
+- **verkopen** — wat de laatste prijsstap was voor een auto verdween;
+- **netto verloop per auto** over de gemeten periode.
+
+Bij elke groep staat het aantal, zodat je ziet hoeveel gewicht een getal kan
+dragen. Vier dagen data levert een indruk op, geen wetmatigheid.
+
 Eén voorbehoud bij `verkocht`: dat wordt afgeleid uit het verdwijnen uit de
 voorraad. De wachter trekt die conclusie alleen als de ophaalronde
 geloofwaardig is, en slaat hem over — met uitleg in de uitvoer — als:

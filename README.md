@@ -215,7 +215,10 @@ ntfy.sh when `NTFY_TOPIC` is set (`./setup-ntfy.sh <topic>` configures and
 tests that in one go). It also reports price
 changes on cars meeting those criteria, and logs every event — new listing,
 price change, disappearance — to `results/historie.csv` for later analysis.
-`./install-watch.sh` schedules it through launchd. See [`INSTALLATIE.md`](INSTALLATIE.md) for the details.
+`./install-watch.sh` schedules it through launchd, and
+`uv run python -m tesla_mcp.analyse` reads the history back: when prices move,
+how far, what each type costs, and what the last price step before a sale
+was. See [`INSTALLATIE.md`](INSTALLATIE.md) for the details.
 
 ## Tech Stack
 

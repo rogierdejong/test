@@ -547,6 +547,97 @@ def test_page_cap_does_not_fake_a_sale() -> None:
         restore()
 
 
+def _history_file(tmp: Path, rows: list[str]) -> Path:
+    header = ("datum,event,VIN,jaar,model,uitvoering,prijs,vorige_prijs,verschil,"
+              "km,kleur,plaats,voldoet_aan_eisen,eerst_gezien,dagen_in_voorraad,url")
+    path = tmp / "historie.csv"
+    path.write_text("\n".join([header, *rows]) + "\n")
+    return path
+
+
+def test_analyse_reads_the_repricing_rhythm() -> None:
+    """Changes bunched after a short gap, none after a long one — a night batch."""
+    import tempfile
+    from tesla_mcp import analyse
+
+    tmp = Path(tempfile.mkdtemp())
+    path = _history_file(tmp, [
+        "2026-08-30 01:00,prijswijziging,A,2023,my,RWD,33000,33200,-200,40000,BLUE,Den Haag,ja,,,u",
+        "2026-08-30 01:00,prijswijziging,B,2023,my,RWD,34000,34300,-300,50000,WHITE,Tilburg,nee,,,u",
+        "2026-08-30 16:00,nieuw,C,2022,my,RWD,31000,,,60000,BLACK,Utrecht,nee,,,u",
+        "2026-08-31 01:00,prijswijziging,A,2023,my,RWD,32800,33000,-200,40000,BLUE,Den Haag,ja,,,u",
+    ])
+    rows = analyse.laad(path)
+
+    per_uur = {u["uur"]: u for u in analyse.per_uur(rows)}
+    assert per_uur["01"]["aantal"] == 3 and per_uur["01"]["mediaan"] == -200
+    assert "16" not in per_uur, "een nieuwe auto is geen prijswijziging"
+
+    ronden = analyse.ronden(rows)
+    assert [r["wijzigingen"] for r in ronden] == [2, 0, 1]
+    assert ronden[1]["gat_uren"] == 15 and ronden[1]["nieuw"] == 1
+    assert ronden[2]["gat_uren"] == 9
+
+
+def test_analyse_price_table_skips_sold_cars() -> None:
+    import tempfile
+    from tesla_mcp import analyse
+
+    tmp = Path(tempfile.mkdtemp())
+    path = _history_file(tmp, [
+        "2026-08-30 01:00,nieuw,A,2023,my,RWD,33000,,,40000,BLUE,Den Haag,ja,,,u",
+        "2026-08-30 01:00,nieuw,B,2023,my,RWD,35000,,,50000,WHITE,Tilburg,nee,,,u",
+        "2026-08-31 01:00,verkocht,B,2023,my,RWD,35000,,,50000,WHITE,Tilburg,nee,,2,u",
+    ])
+    rows = analyse.laad(path)
+
+    tabel = analyse.prijs_per_type(rows)
+    assert len(tabel) == 1
+    assert tabel[0]["aantal"] == 1 and tabel[0]["mediaan"] == 33000
+
+    verkocht = analyse.verkopen(rows)
+    assert len(verkocht) == 1 and verkocht[0]["VIN"] == "B"
+    assert verkocht[0]["dagen"] == 2
+
+
+def test_analyse_km_slope_needs_enough_cars() -> None:
+    """A slope through three points says nothing, so it is withheld."""
+    from tesla_mcp.analyse import helling_km
+
+    # prijs = 40000 - 1 euro per km, dus -10.000 per 10.000 km
+    recht = [(40000 - km, km) for km in (30000, 40000, 50000, 60000, 70000)]
+    assert round(helling_km(recht)) == -10000
+    assert helling_km(recht[:3]) is None
+    assert helling_km([(35000, 0)] * 6) is None, "zonder spreiding geen helling"
+
+
+def test_analyse_reports_the_step_before_a_sale() -> None:
+    import tempfile
+    from tesla_mcp import analyse
+
+    tmp = Path(tempfile.mkdtemp())
+    path = _history_file(tmp, [
+        "2026-08-30 01:00,prijswijziging,A,2023,my,RWD,33900,34600,-700,45000,BLACK,Tilburg,nee,,,u",
+        "2026-08-30 16:00,verkocht,A,2023,my,RWD,33900,,,45000,BLACK,Tilburg,nee,,,u",
+    ])
+    rows = analyse.laad(path)
+
+    verkocht = analyse.verkopen(rows)
+    assert verkocht[0]["laatste_stap"] == -700
+
+    traject = analyse.verloop(rows)
+    assert traject[0]["van"] == 34600 and traject[0]["naar"] == 33900
+
+
+def test_analyse_survives_an_empty_history() -> None:
+    import tempfile
+    from tesla_mcp import analyse
+
+    tmp = Path(tempfile.mkdtemp())
+    assert analyse.laad(tmp / "bestaat-niet.csv") == []
+    analyse.rapport([])  # mag niet omvallen
+
+
 def test_watch_price_and_odometer_limits() -> None:
     from tesla_mcp.watch import Criteria, reject_reason
 
